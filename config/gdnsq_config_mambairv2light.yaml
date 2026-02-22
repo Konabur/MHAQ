@@ -17,7 +17,7 @@ training:
     WandbLogger:
       params:
         name: MambaIRv2Light
-        note: ""
+        note: "conv2d linear quantization"
  
   callbacks:
     NoiseModelCheckpoint:

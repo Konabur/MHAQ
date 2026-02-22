@@ -39,7 +39,7 @@ class GDNSQQuant(BaseQuant):
         return {
             nn.Conv2d: NoisyConv2d,
             nn.Linear: NoisyLinear,
-            nn.Embedding: NoisyEmbedding
+            # nn.Embedding: NoisyEmbedding
         }
 
     def get_loss(self, qmodel):
