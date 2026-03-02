@@ -49,6 +49,7 @@ class NoisyConv2d(nn.Conv2d):
             self.log_wght_s = nn.Parameter(
                 torch.Tensor([log_s_init]), requires_grad=True
             )
+            zero_point = self.weight.amin()
         elif self.qscheme == QScheme.PER_CHANNEL:
             self.log_wght_s = nn.Parameter(
                 torch.empty((out_channels, 1, 1, 1)).fill_(log_s_init),
@@ -57,9 +58,16 @@ class NoisyConv2d(nn.Conv2d):
             self.log_b_s = nn.Parameter(
                 torch.empty(1).fill_(log_s_init), requires_grad=True
             )
+            zero_point = self.weight.amin((1, 2, 3), keepdim=True)
         self._noise_ratio = torch.nn.Parameter(torch.Tensor([1]), requires_grad=False)
+
+        self.register_buffer("zero_point", zero_point, persistent=False)
+        # self.zero_point = nn.Parameter(zero_point)
+        self.register_buffer("scale", torch.exp2(self.log_wght_s), persistent=False)
+        # self.scale = nn.Parameter(torch.exp2(self.log_wght_s))
+
         self.Q = Quantizer(
-            self, torch.exp2(self.log_wght_s), 0, -inf, inf, qnmethod=qnmethod
+            self, self.scale, self.zero_point, -inf, inf, qnmethod=qnmethod
         )
         self.rand_noise = rand_noise
         self.quant_bias = quant_bias
@@ -67,34 +75,41 @@ class NoisyConv2d(nn.Conv2d):
             self.Q_b = Quantizer(
                 self, torch.exp2(self.log_b_s), 0, -inf, inf, qnmethod=qnmethod
             )
+        self.inited = False
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        s = torch.exp2(self.log_wght_s)
-        self.Q.scale = s
+        if self.training or not self.inited:
+            self.inited = True
+            self.scale.data = torch.exp2(self.log_wght_s)
+            if self.qscheme == QScheme.PER_CHANNEL:
+                self.zero_point.data = self.weight.amin((1, 2, 3), keepdim=True)
+            elif self.qscheme == QScheme.PER_TENSOR:
+                self.zero_point.data = self.weight.amin()
+
+        self.Q.scale = self.scale
+        self.Q.zero_point = self.zero_point
         self.Q.rnoise_ratio.data = (
             self._noise_ratio
             if self.rand_noise
             else torch.zeros_like(self._noise_ratio)
         )
 
-        if self.qscheme == QScheme.PER_CHANNEL:
-            min = self.weight.amin((1, 2, 3), keepdim=True)
-        elif self.qscheme == QScheme.PER_TENSOR:
-            min = self.weight.amin()
-        self.Q.zero_point = min
 
-        if self.quant_bias:
-            self.Q_b.scale = s.ravel()
-            self.Q_b.zero_point = min.ravel()
-            self.Q_b.rnoise_ratio.data = (
-                self._noise_ratio
-                if self.rand_noise
-                else torch.zeros_like(self._noise_ratio)
-            )
-            bias = self.Q_b.dequantize(self.Q_b.quantize(self.bias))
-        else:
-            bias = self.bias
 
+        # if self.quant_bias:
+        #     if self.training:
+        #         self.Q_b.scale = s.ravel()
+        #         self.Q_b.zero_point = min.ravel()
+        #         self.Q_b.rnoise_ratio.data = (
+        #             self._noise_ratio
+        #             if self.rand_noise
+        #             else torch.zeros_like(self._noise_ratio)
+        #         )
+        #     bias = self.Q_b.dequantize(self.Q_b.quantize(self.bias))
+        # else:
+        #     bias = self.bias
+
+        bias = self.bias
         weight = self.Q.dequantize(self.Q.quantize(self.weight))
 
         return self._conv_forward(input, weight, bias)

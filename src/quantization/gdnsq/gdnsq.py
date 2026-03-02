@@ -1,7 +1,6 @@
-from matplotlib import scale
 import torch
 
-from torch import Tensor
+from torch import Tensor, nn
 from torch.autograd import Function
 import torch.distributed as dist
 
@@ -130,14 +129,14 @@ class QNAEWGS(QNoise):
 
             eps = 1e-3
             den = (e2 - me.square()).clamp_min(eps)
-            #den0 = 1.0 / 12.0
+            # den0 = 1.0 / 12.0
             delta = num / den
-            
+
             gap = 0.01
             m = 1.0
             # prevent gradient vanish
-            g_scale = (m * delta * num_full).clamp_max(1-gap) 
-            
+            g_scale = (m * delta * num_full).clamp_max(1-gap)
+
             grad_input = -grad_output * g_scale
         if ctx.needs_input_grad[1]:
             # correct scaling accoring to https://arxiv.org/abs/2508.14004
@@ -156,7 +155,47 @@ def scaled_noise(x, s):
     return QNoise.apply(x, s)
 
 
-class Quantizer:
+class BinaryQuantizer(nn.Module):
+    def __init__(
+            self,
+            module: torch.nn.Module,
+            scale: torch.Tensor,
+            zero_point: torch.Tensor,
+            min_val: torch.Tensor,
+            max_val: torch.Tensor,
+            rnoise_ratio: torch.Tensor = torch.Tensor([-1.0,]),
+            qnmethod: QNMethod = QNMethod.STE
+        ) -> None:
+        super(BinaryQuantizer, self).__init__()
+        # self.module = module
+        self.scale = scale
+        self.zero_point = zero_point  # zero point
+        self.min_val = min_val
+        self.max_val = max_val
+        self.rnoise_ratio = torch.Tensor([rnoise_ratio])
+        # self.positive_scale = torch.all(torch.as_tensor(self.scale) > 0).item()
+        self.qnmethod = qnmethod
+    
+    def quantize(self, value):
+        # value = value - self.zero_point
+        # value = torch.sign(value).clamp_min(0)
+        # value = torch.sign(value)
+        # value = (value > self.zero_point).to(value.dtype)
+        value = torch.sign(value - self.zero_point).clamp_min(0)
+        # value = (torch.sign(value - self.zero_point) + 1) / 2
+
+        return value
+    
+    def dequantize(self, quantized_value):
+        # if not self.positive_scale:
+            # return quantized_value + self.zero_point
+
+        return quantized_value * self.scale + (self.zero_point - self.scale / 2) 
+        # return quantized_value * self.scale + self.zero_point
+
+
+
+class Quantizer():
     def __init__(
         self,
         module: torch.nn.modules.Module,
@@ -164,8 +203,8 @@ class Quantizer:
         zero_point: torch.Tensor,
         min_val: torch.Tensor,
         max_val: torch.Tensor,
-        rnoise_ratio: torch.Tensor=torch.Tensor([-1.0,]),
-        qnmethod: QNMethod=QNMethod.STE
+        rnoise_ratio: torch.Tensor = torch.Tensor([-1.0,]),
+        qnmethod: QNMethod = QNMethod.STE
     ) -> None:
         """
         Main quantizer for gdnsq method.
@@ -177,13 +216,17 @@ class Quantizer:
             max_val (float): _description_
             rnoise_ratio (float): _description_
         """
+        super(Quantizer, self).__init__()
         self.module = module
+        # self.register_buffer("scale", scale)
         self.scale = scale
         self.zero_point = zero_point  # zero point
+        # self.register_buffer("zero_point", torch.tensor(zero_point))
         self.min_val = min_val
         self.max_val = max_val
         self.rnoise_ratio = torch.Tensor([rnoise_ratio])
         self.positive_scale = torch.all(torch.as_tensor(self.scale) > 0).item()
+        # self.positive_scale = torch.all(self.scale > 0).item()
         self.qnmethod = qnmethod
 
     def quantize(self, value):
@@ -200,22 +243,25 @@ class Quantizer:
 
         if not self.positive_scale:
             return value
-            
+
         value = value / self.scale
 
         noise = self._get_rnoise(value, self.scale)
-         
+
         value = value + noise
 
-        #assert valid values
+        # assert valid values
         if not self.module.training:
             if torch.any(value < torch.floor((self.min_val - self.zero_point) / self.scale)):
-                raise AssertionError("Not all elements in the tensor above min val")
+                raise AssertionError(
+                    "Not all elements in the tensor above min val")
             if torch.any(value > torch.ceil((self.max_val - self.zero_point) / self.scale)):
-                raise AssertionError("Not all elements in the tensor below max val")            
+                raise AssertionError(
+                    "Not all elements in the tensor below max val")
             if not torch.all((value == value.floor()) | (value == value.ceil())):
-                raise AssertionError("Not all elements in the tensor have integer values.")
-        
+                raise AssertionError(
+                    "Not all elements in the tensor have integer values.")
+
         return value
 
     def dequantize(self, quantized_value):

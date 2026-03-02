@@ -26,7 +26,8 @@ def parse_args():
         help="Path to the configuration file (YAML).",
         # default="config/gdnsq_config_yolo11.yaml"
         # default="config/gdnsq_config_resnet20_old.yaml"
-        default="config/gdnsq_config_rfdn.yaml"
+        # default="config/gdnsq_config_rfdn.yaml"
+        default="config/gdnsq_config_resnet20_cifar100_aewgs_w1a1.yaml"
     )
     return parser.parse_args()
 
@@ -44,25 +45,47 @@ def main():
     data = dataset_composer.compose()
     model = model_composer.compose()
 
-    logger.info(f"Validate Model before quantization:\n{model}")
-    validator.validate(model, datamodule=data)
+    # logger.info(f"Validate Model before quantization:\n{model}")
+    # validator.validate(model, datamodule=data)
 
     qmodel = quantizer.quantize(model, in_place=True)
 
+    # qmodel.strict_loading = False
+    qmodel.load_state_dict(torch.load("logs/MHAQ/c86fef_2026-03-01_21_49/checkpoints/gdnsq_checkpoint-459-0.5783.ckpt")['state_dict'], strict=False)
+
     logger.info("Validate model after layers replacement")
     validator.validate(qmodel, datamodule=data)
-  
-    logger.info("Calibrating model initial weights and scales")
-    validator.calibrate(qmodel, datamodule=data)
+       
+    # logger.info("Calibrating model initial weights and scales")
+    # validator.calibrate(qmodel, datamodule=data)
 
     # # Finetune model
-    trainer.fit(qmodel, datamodule=data)
+    # trainer.fit(qmodel, datamodule=data)
 
     idx = trainer.callbacks.index([cb for cb in trainer.callbacks if "ModelCheckpoint" in cb.__class__.__name__][0])
     validator.callbacks[idx] = trainer.callbacks[idx]
-    validator.test(qmodel, datamodule=data, ckpt_path="best")
 
-    validator.predict(qmodel, datamodule=data, ckpt_path="best")
+    # validate
+    # validator.validate(qmodel, datamodule=data, ckpt_path="best")
+
+    # fuse
+    quantizer.fuse_conv_bn(qmodel)
+
+    validator.validate(qmodel, datamodule=data)
+
+    # logger.info("Replace weights with sgn(weight)")
+
+    # validator.config.quantization.calibration.act_bit = 1
+    # validator.config.quantization.calibration.weight_bit = 1
+    
+
+    # validator.calibrate(qmodel, datamodule=data, ckpt_path="best")
+    # validator.calibrate(qmodel, datamodule=data)
+    # validator.test(qmodel, datamodule=data, ckpt_path="best")
+    # validator.test(qmodel, datamodule=data)
+
+    # validator.predict(qmodel, datamodule=data, ckpt_path="best")
+    # validator.predict(qmodel, datamodule=data)
 
 if __name__ == "__main__":
     main()

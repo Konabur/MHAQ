@@ -112,6 +112,26 @@ class BaseQuant(ABC):
                 raise AttributeError(f"Layer name {layer_name} is not found in the model.")
 
         return quantizable_layers
+
+    def _get_quantized_layers(self, model: nn.Module):
+        """
+        Simple method to get already quantized layer names from the model
+        with regards to supported quantized layer types and excluded layers.
+
+        Args:
+            model (nn.Module): Target model to extract layers from
+
+        Returns:
+            Dict: Layer names and types of already quantized layers
+        """
+
+        quantized_layers = {
+            n: type(m)
+            for n, m in model.named_modules()
+            if issubclass(type(m), tuple(self.module_mappings().values()))
+        }
+
+        return quantized_layers
     
     def _init_config(self):
         """

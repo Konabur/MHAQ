@@ -184,6 +184,37 @@ class Trainer(pl.Trainer):
                 self.validate_loop = sr_loop
                 self.test_loop = sr_loop_test
 
+    def _save_calibrated_as_best_checkpoint(
+        self, model: pl.LightningModule
+    ) -> Path | None:
+        checkpoint_callback = self.checkpoint_callback
+        if checkpoint_callback is None:
+            log.warning(
+                "Skipping calibrated checkpoint save: no ModelCheckpoint callback configured."
+            )
+            return None
+
+        if len(self.checkpoint_callbacks) > 1:
+            log.warning(
+                '`calibrate()` is saving a "best" checkpoint with multiple '
+                "ModelCheckpoint callbacks. The first callback will be updated."
+            )
+
+        ckpt_dir = getattr(checkpoint_callback, "dirpath", None) or self.default_root_dir
+        ckpt_path = Path(ckpt_dir) / "calibrated-best.ckpt"
+        checkpoint_callback.best_model_path = str(ckpt_path)
+        if self.is_global_zero:
+            ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+            # Keep checkpoint format compatible with Lightning restore.
+            torch.save({"state_dict": model.state_dict()}, ckpt_path)
+        self.strategy.barrier("calibrated-best-checkpoint")
+
+        log.info(
+            'Saved calibrated model as new "best" checkpoint: %s',
+            ckpt_path,
+        )
+        return ckpt_path
+
     def calibrate(
         self,
         model=None,
@@ -196,6 +227,8 @@ class Trainer(pl.Trainer):
             "calibration" in self.config.quantization.__dict__
             and self.config.quantization.calibration
         ):
+            
+            model.strict_loading=False
 
             log.info("\nPerforming calibration...")
             c_config = self.config.quantization.calibration
@@ -220,7 +253,8 @@ class Trainer(pl.Trainer):
                 log.info("Skipping activations scales calibration...")
 
             log.info("\nChecking quality of calibration...")
-            self.validate(model, dataloaders, ckpt_path, verbose, datamodule)
+            self.validate(model, dataloaders, None, verbose, datamodule)
+            self._save_calibrated_as_best_checkpoint(model)
 
     def test(
         self,

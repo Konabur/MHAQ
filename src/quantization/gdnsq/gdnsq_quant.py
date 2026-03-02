@@ -13,12 +13,14 @@ from src.quantization.gdnsq.utils.model_helper import ModelHelper
 from src.quantization.gdnsq.gdnsq_loss import PotentialLoss, PotentialLossNoPred
 from src.quantization.gdnsq.gdnsq_utils import QNMethod
 from src.quantization.gdnsq.utils import model_stats
+from src.quantization.gdnsq.gdnsq import BinaryQuantizer
 from src.aux.qutils import attrsetter, is_biased
 from src.aux.loss.hellinger import HellingerLoss
 from src.aux.loss.symm_ce_loss import SymmetricalCrossEntropyLoss
 from src.aux.loss.distill_ce import CrossEntropyLoss
 from src.aux.loss.symm_kl_loss import SymmetricalKL
 from src.aux.loss.kl_loss import KL
+
 from src.aux.loss.jsdloss import JSDLoss
 
 from torch import nn
@@ -128,7 +130,7 @@ class GDNSQQuant(BaseQuant):
                 preceding_layer_type = layer_types[layer_names.index(layer) - 1]
                 following_layer_type = layer_types[layer_names.index(layer) + 1]
                 if issubclass(following_layer_type, nn.BatchNorm2d) and self.fusebn:
-                    self.fuse_conv_bn(
+                    self.fuse_conv_bn_(
                         qmodel.model, layer, layer_names[layer_names.index(layer) + 1]
                     )
                 if issubclass(
@@ -158,12 +160,25 @@ class GDNSQQuant(BaseQuant):
                 module.weight.requires_grad = not freeze
                 module.bias.requires_grad = not freeze
 
-    def fuse_conv_bn(self, model: nn.Module, conv_name: str, bn_name: str):
+    def fuse_conv_bn(self, model):
+        layer_names, layer_types = zip(
+            *[(n, type(m)) for n, m in model.model.named_modules()])
+        qlayers = self._get_quantized_layers(model.model)
+        for layer in qlayers.keys():
+            # module = attrgetter(layer)(model.model)
+            # preceding_layer_type = layer_types[layer_names.index(layer) - 1]
+            following_layer_type = layer_types[layer_names.index(layer) + 1]
+            if issubclass(following_layer_type, nn.BatchNorm2d):
+                self.fuse_conv_bn_q(model.model, layer, layer_names[layer_names.index(layer) + 1])
+        
+        pass
+
+    def fuse_conv_bn_(self, model: nn.Module, conv_name: str, bn_name: str):
         conv = attrgetter(conv_name)(model)
 
-        W = conv.weight.clone()
+        W = conv.weight.detach().clone()
         if conv.bias is not None:
-            b = conv.bias.clone()
+            b = conv.bias.detach().clone()
         else:
             b = torch.zeros(conv.out_channels, device=W.device)
 
@@ -182,6 +197,55 @@ class GDNSQQuant(BaseQuant):
         conv.bias = nn.Parameter(beta + (b - mu) * scale)
 
         attrsetter(bn_name)(model, nn.Identity())  # Replacing bn module with Identity
+    
+    def fuse_conv_bn_q(self, model: nn.Module, conv_name: str, bn_name: str):
+            conv = attrgetter(conv_name)(model)
+            prev_q = conv.Q
+            new_zero_point = prev_q.zero_point + (prev_q.scale / 2)
+            # new_scale = prev_q.scale + 2 * prev_q.zero_point 
+            # new_scale = prev_q.scale / 2
+            new_scale = prev_q.scale
+            # new_scale = conv.weight.abs().mean(dim=(1,2,3), keepdim=True)
+            conv.scale = new_scale
+            conv.zero_point = new_zero_point
+            conv.Q = BinaryQuantizer(
+                module=conv,
+                scale=new_scale,
+                zero_point=new_zero_point,
+                min_val=prev_q.min_val,
+                max_val=prev_q.max_val,
+                rnoise_ratio=float(torch.as_tensor(prev_q.rnoise_ratio).reshape(-1)[0]),
+                qnmethod=prev_q.qnmethod,
+            )
+
+            # TODO replace original quantizer with the binary quantizer
+
+
+
+            # W = conv.weight.detach().clone()
+            # if conv.bias is not None:
+            #     b = conv.bias.detach().clone()
+            # else:
+            #     b = torch.zeros(conv.out_channels, device=W.device)
+
+            # bn = attrgetter(bn_name)(model)
+            # mu = bn.running_mean
+            # var = bn.running_var
+            # eps = bn.eps
+            # gamma = bn.weight
+            # beta = bn.bias
+
+            # std = torch.sqrt(var + eps)
+            # scale = gamma / std
+            # # shape = conv.log_wght_s.shape
+            # shape = [-1] + [1] * (W.dim() - 1)
+
+            # conv.weight.data = W * scale.view(shape)
+            # # conv.weight.data = torch.sgn(W) 
+            # # conv.log_wght_s.data -= torch.log2(scale.view(shape))
+            # conv.bias = nn.Parameter(beta + (b - mu) * scale)
+
+            # attrsetter(bn_name)(model, nn.Identity())  # Replacing
 
     @staticmethod
     def noise_ratio(self, x=None):
