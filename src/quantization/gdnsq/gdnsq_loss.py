@@ -130,6 +130,7 @@ class PotentialLossNoPred(nn.Module):
 
         self.base_loss = bloss
         loss = bloss
+        cirr = torch.normal(torch.tensor(.9), torch.tensor(0.5)).clamp(0, 1)
 
         z = torch.tensor(0)
         wloss0 = (torch.max(z, (lwq - lws) -
@@ -144,7 +145,7 @@ class PotentialLossNoPred(nn.Module):
 
         rloss = loss.pow_(self.p)
 
-        calib_mul = self.loss_sum / self.cnt
+        calib_mul = self.loss_sum / self.cnt * cirr
         wmul = (wact + self.l_eps) / (wact + aact + self.l_eps)
         amul = (aact + self.l_eps) / (wact + aact + self.l_eps)
 
