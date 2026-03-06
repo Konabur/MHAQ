@@ -103,7 +103,8 @@ class GDNSQQuant(BaseQuant):
                 w=self.weight_bit,
             )
 
-        qmodel.noise_ratio = GDNSQQuant.noise_ratio.__get__(qmodel, type(qmodel))
+        qmodel.noise_ratio = GDNSQQuant.noise_ratio.__get__(
+            qmodel, type(qmodel))
 
         # Important step. Replacing training and validation steps
         # with alternated ones.
@@ -112,33 +113,41 @@ class GDNSQQuant(BaseQuant):
                 qmodel, type(qmodel)
             )
             # qmodel.validation_step = GDNSQQuant.noisy_validation_step.__get__(
-                # qmodel, type(qmodel)
+            # qmodel, type(qmodel)
             # )
         else:
-            qmodel.training_step = GDNSQQuant.noisy_train_decorator(qmodel.training_step)
+            qmodel.training_step = GDNSQQuant.noisy_train_decorator(
+                qmodel.training_step)
             # qmodel.validation_step = GDNSQQuant.noisy_val_decorator(qmodel.validation_step)
 
-        qmodel.validation_step = GDNSQQuant.noisy_val_decorator(qmodel.validation_step)
+        qmodel.validation_step = GDNSQQuant.noisy_val_decorator(
+            qmodel.validation_step)
         qmodel.test_step = GDNSQQuant.noisy_test_decorator(qmodel.test_step)
 
         # Replacing layers directly
-        qlayers = self._get_layers(lmodel.model, exclude_layers=self.excluded_layers)
+        qlayers = self._get_layers(
+            lmodel.model, exclude_layers=self.excluded_layers)
         for layer in qlayers.keys():
             module = attrgetter(layer)(lmodel.model)
             if module.kernel_size != (1, 1):
                 # print(layer + " " + repr(module.kernel_size))
-                preceding_layer_type = layer_types[layer_names.index(layer) - 1]
-                following_layer_type = layer_types[layer_names.index(layer) + 1]
+                preceding_layer_type = layer_types[layer_names.index(
+                    layer) - 1]
+                following_layer_type = layer_types[layer_names.index(
+                    layer) + 1]
                 if issubclass(following_layer_type, nn.BatchNorm2d) and self.fusebn:
                     self.fuse_conv_bn_(
-                        qmodel.model, layer, layer_names[layer_names.index(layer) + 1]
+                        qmodel.model, layer, layer_names[layer_names.index(
+                            layer) + 1]
                     )
                 if issubclass(
                     preceding_layer_type, (nn.ReLU)
                 ):  # XXX: hack shoul be changed through config
-                    qmodule = self._quantize_module(module, signed_activations=False)
+                    qmodule = self._quantize_module(
+                        module, signed_activations=False)
                 else:
-                    qmodule = self._quantize_module(module, signed_activations=True)
+                    qmodule = self._quantize_module(
+                        module, signed_activations=True)
 
                 attrsetter(layer)(qmodel.model, qmodule)
 
@@ -169,8 +178,9 @@ class GDNSQQuant(BaseQuant):
             # preceding_layer_type = layer_types[layer_names.index(layer) - 1]
             following_layer_type = layer_types[layer_names.index(layer) + 1]
             if issubclass(following_layer_type, nn.BatchNorm2d):
-                self.fuse_conv_bn_q(model.model, layer, layer_names[layer_names.index(layer) + 1])
-        
+                self.fuse_conv_bn_q(model.model, layer,
+                                    layer_names[layer_names.index(layer) + 1])
+
         pass
 
     def fuse_conv_bn_(self, model: nn.Module, conv_name: str, bn_name: str):
@@ -196,56 +206,54 @@ class GDNSQQuant(BaseQuant):
         conv.weight.data = W * scale.view(shape)
         conv.bias = nn.Parameter(beta + (b - mu) * scale)
 
-        attrsetter(bn_name)(model, nn.Identity())  # Replacing bn module with Identity
-    
+        # Replacing bn module with Identity
+        attrsetter(bn_name)(model, nn.Identity())
+
     def fuse_conv_bn_q(self, model: nn.Module, conv_name: str, bn_name: str):
-            conv = attrgetter(conv_name)(model)
-            prev_q = conv.Q
-            new_zero_point = prev_q.zero_point + (prev_q.scale / 2)
-            # new_scale = prev_q.scale + 2 * prev_q.zero_point 
-            # new_scale = prev_q.scale / 2
-            new_scale = prev_q.scale
-            # new_scale = conv.weight.abs().mean(dim=(1,2,3), keepdim=True)
-            conv.scale = new_scale
-            conv.zero_point = new_zero_point
-            conv.Q = BinaryQuantizer(
-                module=conv,
-                scale=new_scale,
-                zero_point=new_zero_point,
-                min_val=prev_q.min_val,
-                max_val=prev_q.max_val,
-                rnoise_ratio=float(torch.as_tensor(prev_q.rnoise_ratio).reshape(-1)[0]),
-                qnmethod=prev_q.qnmethod,
-            )
+        conv = attrgetter(conv_name)(model)
+        prev_q = conv.Q
+        new_zero_point = prev_q.zero_point + prev_q.scale.mul(0.5)
+        new_scale = prev_q.scale
+        conv.scale = new_scale
+        conv.zero_point = new_zero_point
+        # some hack with "shaking" weights in order to get proper binarization
+        conv.weight.data = conv.weight.data + prev_q.scale.mul(0.5).to(conv.weight.device) - prev_q.scale.mul(
+            0.5).to(conv.weight.device)
 
-            # TODO replace original quantizer with the binary quantizer
+        W = conv.weight.detach().clone()
+        if conv.bias is not None:
+            b = conv.bias.detach().clone()
+        else:
+            b = torch.zeros(conv.out_channels, device=W.device)
 
+        bn = attrgetter(bn_name)(model)
+        mu = bn.running_mean
+        var = bn.running_var
+        eps = bn.eps
+        gamma = bn.weight
+        beta = bn.bias
 
+        std = torch.sqrt(var + eps)
+        bn_scale = gamma / std
 
-            # W = conv.weight.detach().clone()
-            # if conv.bias is not None:
-            #     b = conv.bias.detach().clone()
-            # else:
-            #     b = torch.zeros(conv.out_channels, device=W.device)
+        conv.bias = nn.Parameter(beta + (b - mu) * bn_scale)
+        conv.weight.data *= bn_scale.view([-1] + [1] * (W.dim() - 1))
+        new_zero_point *= bn_scale.view(
+            new_zero_point.shape).to(new_zero_point.device)
+        new_scale *= bn_scale.view(new_scale.shape).to(new_zero_point.device)
 
-            # bn = attrgetter(bn_name)(model)
-            # mu = bn.running_mean
-            # var = bn.running_var
-            # eps = bn.eps
-            # gamma = bn.weight
-            # beta = bn.bias
+        conv.Q = BinaryQuantizer(
+            module=conv,
+            scale=new_scale,
+            zero_point=new_zero_point,
+            min_val=prev_q.min_val,
+            max_val=prev_q.max_val,
+            rnoise_ratio=float(torch.as_tensor(
+                prev_q.rnoise_ratio).reshape(-1)[0]),
+            qnmethod=prev_q.qnmethod,
+        )
 
-            # std = torch.sqrt(var + eps)
-            # scale = gamma / std
-            # # shape = conv.log_wght_s.shape
-            # shape = [-1] + [1] * (W.dim() - 1)
-
-            # conv.weight.data = W * scale.view(shape)
-            # # conv.weight.data = torch.sgn(W) 
-            # # conv.log_wght_s.data -= torch.log2(scale.view(shape))
-            # conv.bias = nn.Parameter(beta + (b - mu) * scale)
-
-            # attrsetter(bn_name)(model, nn.Identity())  # Replacing
+        attrsetter(bn_name)(model, nn.Identity())  # Replacing
 
     @staticmethod
     def noise_ratio(self, x=None):
@@ -305,7 +313,7 @@ class GDNSQQuant(BaseQuant):
             loss = val_step(*args)
             # for metric in self.trainer.model.metrics:
             for metric in self.metrics:
-                if key := [key for key in self.trainer.logged_metrics.keys() if  metric[0] in key][0]:
+                if key := [key for key in self.trainer.logged_metrics.keys() if metric[0] in key][0]:
                     metric_value = self.trainer.logged_metrics[key]
                 # if metric_value := metric[1]._forward_cache:
                 # if metric_value := :
@@ -313,13 +321,13 @@ class GDNSQQuant(BaseQuant):
                         metric_name = metric[0]
                     else:
                         metric_name = metric
-                    self.log(f"Metric/ns_{metric_name}", 
-                             metric_value * model_stats.is_converged(self), 
+                    self.log(f"Metric/ns_{metric_name}",
+                             metric_value * model_stats.is_converged(self),
                              prog_bar=False,
                              sync_dist=True)
 
-
-            self.log("Loss/Validation loss", loss, prog_bar=False, sync_dist=True)
+            self.log("Loss/Validation loss", loss,
+                     prog_bar=False, sync_dist=True)
 
             self.log(
                 "Mean weights bit width",
@@ -389,7 +397,8 @@ class GDNSQQuant(BaseQuant):
         fp_outputs = self.tmodel.predict_step(inputs, batch_idx)
         loss = self.wrapped_criterion(outputs, fp_outputs)
 
-        self.log("Loss/FP loss", F.cross_entropy(fp_outputs, targets), sync_dist=True)
+        self.log("Loss/FP loss",
+                 F.cross_entropy(fp_outputs, targets), sync_dist=True)
         self.log(
             "Loss/Base train loss",
             self.wrapped_criterion.base_loss,
@@ -456,17 +465,19 @@ class GDNSQQuant(BaseQuant):
         # Oh, I hate this, but here we goo
         try:
             val_loss = self.criterion(outputs[0], targets)
-            self.log("Loss/Validation loss", val_loss, prog_bar=False, sync_dist=True)
+            self.log("Loss/Validation loss", val_loss,
+                     prog_bar=False, sync_dist=True)
         except:
             pass
-        
+
         for name, metric in self.metrics:
             metric_value = metric(outputs[0], targets)
             # metric_value = metric(outputs, targets)
             if issubclass(
                 metric.__class__, torchmetrics.detection.MeanAveragePrecision
             ):
-                self.log(f"Metric/mAP@[.5:.95]", metric_value["map"], prog_bar=False, sync_dist=True)
+                self.log(
+                    f"Metric/mAP@[.5:.95]", metric_value["map"], prog_bar=False, sync_dist=True)
                 self.log(
                     f"Metric/ns_mAP@[.5:.95]",
                     metric_value["map"] * model_stats.is_converged(self),
@@ -474,7 +485,8 @@ class GDNSQQuant(BaseQuant):
                     sync_dist=True
                 )
             else:
-                self.log(f"Metric/{name}", metric_value, prog_bar=False, sync_dist=True)
+                self.log(f"Metric/{name}", metric_value,
+                         prog_bar=False, sync_dist=True)
                 self.log(
                     f"Metric/ns_{name}",
                     metric_value * model_stats.is_converged(self),
