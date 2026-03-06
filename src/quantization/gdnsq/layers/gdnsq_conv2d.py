@@ -62,9 +62,7 @@ class NoisyConv2d(nn.Conv2d):
         self._noise_ratio = torch.nn.Parameter(torch.Tensor([1]), requires_grad=False)
 
         self.register_buffer("zero_point", zero_point, persistent=False)
-        # self.zero_point = nn.Parameter(zero_point)
         self.register_buffer("scale", torch.exp2(self.log_wght_s), persistent=False)
-        # self.scale = nn.Parameter(torch.exp2(self.log_wght_s))
 
         self.Q = Quantizer(
             self, self.scale, self.zero_point, -inf, inf, qnmethod=qnmethod

@@ -136,7 +136,7 @@ class GDNSQQuant(BaseQuant):
                 following_layer_type = layer_types[layer_names.index(
                     layer) + 1]
                 if issubclass(following_layer_type, nn.BatchNorm2d) and self.fusebn:
-                    self.fuse_conv_bn_(
+                    self._fuse_conv_bn(
                         qmodel.model, layer, layer_names[layer_names.index(
                             layer) + 1]
                     )
@@ -178,12 +178,14 @@ class GDNSQQuant(BaseQuant):
             # preceding_layer_type = layer_types[layer_names.index(layer) - 1]
             following_layer_type = layer_types[layer_names.index(layer) + 1]
             if issubclass(following_layer_type, nn.BatchNorm2d):
-                self.fuse_conv_bn_q(model.model, layer,
-                                    layer_names[layer_names.index(layer) + 1])
+                if self.weight_bit == 1: # special case for binary weights bn fusing
+                    self._fuse_conv_bn_q(model.model, layer,
+                                         layer_names[layer_names.index(layer) + 1])
+                else:
+                    self._fuse_conv_bn(
+                        model.model, layer, layer_names[layer_names.index(layer) + 1])
 
-        pass
-
-    def fuse_conv_bn_(self, model: nn.Module, conv_name: str, bn_name: str):
+    def _fuse_conv_bn(self, model: nn.Module, conv_name: str, bn_name: str):
         conv = attrgetter(conv_name)(model)
 
         W = conv.weight.detach().clone()
@@ -209,16 +211,16 @@ class GDNSQQuant(BaseQuant):
         # Replacing bn module with Identity
         attrsetter(bn_name)(model, nn.Identity())
 
-    def fuse_conv_bn_q(self, model: nn.Module, conv_name: str, bn_name: str):
+    # I could optimize the shit out of this function but since it is invocated only once, I don't care.
+    # So let's keep it KISS.
+    # TODO due to the questionable manipulations whom are mathematically correct (at first glance at least)
+    # There is slight metric loss. Because of the lack if fp32 precision I suppose.
+    # FIX IT!
+    def _fuse_conv_bn_q(self, model: nn.Module, conv_name: str, bn_name: str):
         conv = attrgetter(conv_name)(model)
         prev_q = conv.Q
         new_zero_point = prev_q.zero_point + prev_q.scale.mul(0.5)
         new_scale = prev_q.scale
-        conv.scale = new_scale
-        conv.zero_point = new_zero_point
-        # some hack with "shaking" weights in order to get proper binarization
-        conv.weight.data = conv.weight.data + prev_q.scale.mul(0.5).to(conv.weight.device) - prev_q.scale.mul(
-            0.5).to(conv.weight.device)
 
         W = conv.weight.detach().clone()
         if conv.bias is not None:
@@ -236,8 +238,14 @@ class GDNSQQuant(BaseQuant):
         std = torch.sqrt(var + eps)
         bn_scale = gamma / std
 
-        conv.bias = nn.Parameter(beta + (b - mu) * bn_scale)
+        conv.scale = new_scale
+        conv.zero_point = new_zero_point
+        # hack with "shaking" weights in order to get proper binarization
+        # (try to disable it and see what happens, or come up with a better solution)
+        conv.weight.data = conv.weight.data + prev_q.scale.mul(0.5).to(conv.weight.device) - prev_q.scale.mul(
+            0.5).to(conv.weight.device)
         conv.weight.data *= bn_scale.view([-1] + [1] * (W.dim() - 1))
+        conv.bias = nn.Parameter(beta + (b - mu) * bn_scale)
         new_zero_point *= bn_scale.view(
             new_zero_point.shape).to(new_zero_point.device)
         new_scale *= bn_scale.view(new_scale.shape).to(new_zero_point.device)
@@ -253,7 +261,7 @@ class GDNSQQuant(BaseQuant):
             qnmethod=prev_q.qnmethod,
         )
 
-        attrsetter(bn_name)(model, nn.Identity())  # Replacing
+        attrsetter(bn_name)(model, nn.Identity())
 
     @staticmethod
     def noise_ratio(self, x=None):

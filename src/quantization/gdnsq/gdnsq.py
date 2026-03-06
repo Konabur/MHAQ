@@ -173,25 +173,15 @@ class BinaryQuantizer(nn.Module):
         self.min_val = min_val
         self.max_val = max_val
         self.rnoise_ratio = torch.Tensor([rnoise_ratio])
-        # self.positive_scale = torch.all(torch.as_tensor(self.scale) > 0).item()
         self.qnmethod = qnmethod
     
     def quantize(self, value):
-        # value = value - self.zero_point
-        # value = torch.sign(value).clamp_min(0)
-        # value = torch.sign(value)
-        # value = (value > self.zero_point).to(value.dtype)
         value = torch.sign(value - self.zero_point).clamp_min(0)
-        # value = (torch.sign(value - self.zero_point) + 1) / 2
 
         return value
     
     def dequantize(self, quantized_value):
-        # if not self.positive_scale:
-            # return quantized_value + self.zero_point
-
         return quantized_value * self.scale + (self.zero_point - self.scale / 2) 
-        # return quantized_value * self.scale + self.zero_point
 
 
 
