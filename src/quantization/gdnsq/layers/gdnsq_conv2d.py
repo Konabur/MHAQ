@@ -49,7 +49,7 @@ class NoisyConv2d(nn.Conv2d):
             self.log_wght_s = nn.Parameter(
                 torch.Tensor([log_s_init]), requires_grad=True
             )
-            zero_point = self.weight.amin()
+            zero_point = self.weight.detach().amin()
         elif self.qscheme == QScheme.PER_CHANNEL:
             self.log_wght_s = nn.Parameter(
                 torch.empty((out_channels, 1, 1, 1)).fill_(log_s_init),
@@ -58,11 +58,13 @@ class NoisyConv2d(nn.Conv2d):
             self.log_b_s = nn.Parameter(
                 torch.empty(1).fill_(log_s_init), requires_grad=True
             )
-            zero_point = self.weight.amin((1, 2, 3), keepdim=True)
+            zero_point = self.weight.detach().amin((1, 2, 3), keepdim=True)
         self._noise_ratio = torch.nn.Parameter(torch.Tensor([1]), requires_grad=False)
 
         self.register_buffer("zero_point", zero_point, persistent=False)
-        self.register_buffer("scale", torch.exp2(self.log_wght_s), persistent=False)
+        self.register_buffer(
+            "scale", torch.exp2(self.log_wght_s.detach()).clone(), persistent=False
+        )
 
         self.Q = Quantizer(
             self, self.scale, self.zero_point, -inf, inf, qnmethod=qnmethod
@@ -76,16 +78,33 @@ class NoisyConv2d(nn.Conv2d):
         self.inited = False
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        if self.training or not self.inited:
-            self.inited = True
-            self.scale.data = torch.exp2(self.log_wght_s)
+        if self.training:
+            scale = torch.exp2(self.log_wght_s)
             if self.qscheme == QScheme.PER_CHANNEL:
-                self.zero_point.data = self.weight.amin((1, 2, 3), keepdim=True)
+                zero_point = self.weight.amin((1, 2, 3), keepdim=True)
             elif self.qscheme == QScheme.PER_TENSOR:
-                self.zero_point.data = self.weight.amin()
+                zero_point = self.weight.amin()
 
-        self.Q.scale = self.scale
-        self.Q.zero_point = self.zero_point
+            with torch.no_grad():
+                self.inited = True
+                self.scale.copy_(scale.detach())
+                self.zero_point.copy_(zero_point.detach())
+        else:
+            if not self.inited:
+                with torch.no_grad():
+                    self.scale.copy_(torch.exp2(self.log_wght_s).detach())
+                    if self.qscheme == QScheme.PER_CHANNEL:
+                        self.zero_point.copy_(
+                            self.weight.detach().amin((1, 2, 3), keepdim=True)
+                        )
+                    elif self.qscheme == QScheme.PER_TENSOR:
+                        self.zero_point.copy_(self.weight.detach().amin())
+                    self.inited = True
+            scale = self.scale
+            zero_point = self.zero_point
+
+        self.Q.scale = scale
+        self.Q.zero_point = zero_point
         self.Q.rnoise_ratio.data = (
             self._noise_ratio
             if self.rand_noise
@@ -109,6 +128,10 @@ class NoisyConv2d(nn.Conv2d):
 
         bias = self.bias
         weight = self.Q.dequantize(self.Q.quantize(self.weight))
+
+        # mask = torch.ones_like(weight)
+        # mask[:, :, weight.shape[-2] // 2, weight.shape[-1] // 2] = 0.0
+        # weight = weight * mask
 
         return self._conv_forward(input, weight, bias)
 

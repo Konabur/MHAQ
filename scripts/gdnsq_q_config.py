@@ -45,13 +45,14 @@ def main():
     data = dataset_composer.compose()
     model = model_composer.compose()
 
-    # logger.info(f"Validate Model before quantization:\n{model}")
-    # validator.validate(model, datamodule=data)
+    logger.info(f"Validate Model before quantization:\n{model}")
+    validator.validate(model, datamodule=data)
 
     qmodel = quantizer.quantize(model, in_place=True)
 
     # qmodel.strict_loading = False
     qmodel.load_state_dict(torch.load("logs/MHAQ/c86fef_2026-03-01_21_49/checkpoints/gdnsq_checkpoint-459-0.5783.ckpt")['state_dict'], strict=False)
+    # qmodel.load_state_dict(torch.load("logs/MHAQ/8c8abb_2026-03-07_22_36/checkpoints/gdnsq_checkpoint-639-0.5629.ckpt")['state_dict'], strict=False)
 
     logger.info("Validate model after layers replacement")
     validator.validate(qmodel, datamodule=data)
@@ -68,10 +69,17 @@ def main():
     # validate
     # validator.validate(qmodel, datamodule=data, ckpt_path="best")
 
+    logger.info("Fusing BATCH NORM")
     # fuse
     quantizer.fuse_conv_bn(qmodel)
+    print(qmodel.binary_quantizer_weight_mean_diffs)
+    print(f"SUM of mean_abs_diff {sum([qmodel.binary_quantizer_weight_mean_diffs[l]["mean_abs_diff"] for l in qmodel.binary_quantizer_weight_mean_diffs])}")
+    print(f"SUM of mean_diff {sum([qmodel.binary_quantizer_weight_mean_diffs[l]["mean_diff"] for l in qmodel.binary_quantizer_weight_mean_diffs])}")
 
+    logger.info("Validate after fusing")
     validator.validate(qmodel, datamodule=data)
+
+    exit(0)
 
     # logger.info("Replace weights with sgn(weight)")
 
