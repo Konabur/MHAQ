@@ -177,7 +177,6 @@ class BinaryQuantizer(nn.Module):
     
     def quantize(self, value):
         value = torch.sign(value - self.zero_point).clamp_min(0)
-        # value = (value > self.zero_point).to(value.dtype)
 
         return value
     

@@ -129,9 +129,6 @@ class NoisyConv2d(nn.Conv2d):
         bias = self.bias
         weight = self.Q.dequantize(self.Q.quantize(self.weight))
 
-        # mask = torch.ones_like(weight)
-        # mask[:, :, weight.shape[-2] // 2, weight.shape[-1] // 2] = 0.0
-        # weight = weight * mask
 
         return self._conv_forward(input, weight, bias)
 

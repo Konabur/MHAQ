@@ -12,9 +12,12 @@ from src.quantization.gdnsq.layers.gdnsq_act import NoisyAct
 from src.quantization.gdnsq.gdnsq_loss import PotentialLoss, PotentialLossNoPred
 from src.quantization.gdnsq.gdnsq_utils import QNMethod
 from src.quantization.gdnsq.utils.model_helper import ModelHelper
-from src.quantization.gdnsq.utils.fuse_conv_bn import fuse_conv_bn, fuse_conv_bn_q
+from src.quantization.gdnsq.utils.fuse_conv_bn import (
+    fuse_conv_bn,
+    fuse_conv_bn_q,
+    fuse_conv_bn_q_optimized,
+)
 from src.quantization.gdnsq.utils import model_stats
-from src.quantization.gdnsq.gdnsq import BinaryQuantizer, Quantizer
 from src.aux.qutils import attrsetter, is_biased
 from src.aux.loss.hellinger import HellingerLoss
 from src.aux.loss.symm_ce_loss import SymmetricalCrossEntropyLoss
@@ -181,7 +184,8 @@ class GDNSQQuant(BaseQuant):
             following_layer_type = layer_types[layer_names.index(layer) + 1]
             if issubclass(following_layer_type, nn.BatchNorm2d):
                 if self.weight_bit == 1:  # special case for binary weights bn fusing
-                    diff_stats = fuse_conv_bn_q(
+                    diff_stats = fuse_conv_bn_q_optimized(
+                    # diff_stats = fuse_conv_bn_q(
                         model.model,
                         layer,
                         layer_names[layer_names.index(layer) + 1],
