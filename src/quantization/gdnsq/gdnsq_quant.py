@@ -8,7 +8,6 @@ from src.models.cls.resnet.resnet_cifar import resnet20_cifar10_new
 from src.quantization.abc.abc_quant import BaseQuant
 from src.quantization.gdnsq.layers.gdnsq_conv2d import NoisyConv2d
 from src.quantization.gdnsq.layers.gdnsq_linear import NoisyLinear
-from src.quantization.gdnsq.layers.gdnsq_act import NoisyAct
 from src.quantization.gdnsq.utils.model_helper import ModelHelper
 from src.quantization.gdnsq.gdnsq_loss import PotentialLoss, PotentialLossNoPred
 from src.quantization.gdnsq.gdnsq_utils import QNMethod
@@ -24,7 +23,6 @@ from src.aux.loss.jsdloss import JSDLoss
 from torch import nn
 from copy import deepcopy
 from operator import attrgetter
-from collections import OrderedDict
 
 
 class GDNSQQuant(BaseQuant):
@@ -482,10 +480,19 @@ class GDNSQQuant(BaseQuant):
 
     def _quantize_module(self, module, signed_activations):
         self.qnmethod = QNMethod[self.quant_config.params.qnmethod]
+        disable_activations = self.config.quantization.act_bit == -1
         if isinstance(module, nn.Conv2d):
-            qmodule = self._quantize_module_conv2d(module)
+            qmodule = self._quantize_module_conv2d(
+                module,
+                signed_activations=signed_activations,
+                disable_activations=disable_activations,
+            )
         elif isinstance(module, nn.Linear):
-            qmodule = self._quantize_module_linear(module)
+            qmodule = self._quantize_module_linear(
+                module,
+                signed_activations=signed_activations,
+                disable_activations=disable_activations,
+            )
         else:
             raise NotImplementedError(f"Module not supported {type(module)}")
 
@@ -494,30 +501,18 @@ class GDNSQQuant(BaseQuant):
         if is_biased(module):
             qmodule.bias = module.bias
 
-        qmodule = self._get_quantization_sequence(qmodule, signed_activations)
-
         return qmodule
 
-    def _get_quantization_sequence(self, qmodule, signed_activations):
-        disabled = self.config.quantization.act_bit == -1
-        sequence = nn.Sequential(
-            OrderedDict(
-                [
-                    (
-                        "activations_quantizer",
-                        NoisyAct(
-                            signed=signed_activations,
-                            disable=disabled,
-                        ),
-                    ),
-                    ("0", qmodule),
-                ]
-            )
-        )
+    def _get_quantization_sequence(self, qmodule):
+        return qmodule
 
-        return sequence
-
-    def _quantize_module_conv2d(self, module: nn.Conv2d):
+    def _quantize_module_conv2d(
+        self,
+        module: nn.Conv2d,
+        *,
+        signed_activations: bool,
+        disable_activations: bool,
+    ):
         return NoisyConv2d(
             module.in_channels,
             module.out_channels,
@@ -531,15 +526,25 @@ class GDNSQQuant(BaseQuant):
             qscheme=self.qscheme,
             log_s_init=-12,
             quant_bias=self.quant_bias,
-            qnmethod=self.qnmethod
+            signed=signed_activations,
+            disable=disable_activations,
+            qnmethod=self.qnmethod,
         )
 
-    def _quantize_module_linear(self, module: nn.Linear):
+    def _quantize_module_linear(
+        self,
+        module: nn.Linear,
+        *,
+        signed_activations: bool,
+        disable_activations: bool,
+    ):
         return NoisyLinear(
             module.in_features,
             module.out_features,
             is_biased(module),
             qscheme=self.qscheme,
             log_s_init=-12,
+            signed=signed_activations,
+            disable=disable_activations,
             qnmethod=self.qnmethod
         )

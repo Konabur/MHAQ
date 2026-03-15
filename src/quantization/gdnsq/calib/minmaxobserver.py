@@ -2,7 +2,7 @@ import torch
 
 from src.quantization.gdnsq.layers.gdnsq_conv2d import NoisyConv2d
 from src.quantization.gdnsq.layers.gdnsq_linear import NoisyLinear
-from src.quantization.gdnsq.layers.gdnsq_act import NoisyAct
+from src.quantization.gdnsq.layers.gdnsq_act_lin import NoisyActLin
 from src.loggers.default_logger import logger
 from src.aux.traverse import previous_leaf
 import numpy as np
@@ -39,7 +39,7 @@ class MinMaxObserver(ObserverHook):
 def apply_mean_stats_activations(module, abits=8, max_bits = 24):    
     for name, m in module.named_modules():
 
-        if isinstance(m, NoisyAct):
+        if isinstance(m, NoisyActLin):
             min = m.min_values.min()
             max = m.max_values.max()
 
