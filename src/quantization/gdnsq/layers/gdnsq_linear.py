@@ -27,10 +27,10 @@ class NoisyLinear(NoisyActLin, nn.Linear):
         qnmethod: QNMethod = QNMethod.STE,
     ) -> None:
         nn.Linear.__init__(self, in_features, out_features, bias, device, dtype)
+        # 'signed' is kept for backward compatibility but currently ignored.
         self._init_activation_quantization(
             init_s=act_init_s,
             init_q=act_init_q,
-            signed=signed,
             disable=disable,
         )
         self._init_weight_quantization(

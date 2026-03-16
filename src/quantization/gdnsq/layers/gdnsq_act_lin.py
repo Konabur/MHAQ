@@ -8,53 +8,25 @@ from src.quantization.gdnsq.gdnsq_utils import QNMethod
 
 
 class NoisyActLin(nn.Module):
-    def _make_act_b_parameter(
-        self,
-        value: torch.Tensor,
-        *,
-        requires_grad: bool,
-    ) -> nn.Parameter:
-        parameter = nn.Parameter(value.reshape(1), requires_grad=requires_grad)
-        if requires_grad and torch.isclose(
-            parameter.detach(), torch.zeros_like(parameter.detach())
-        ).all().item():
-            parameter.register_hook(lambda grad: torch.zeros_like(grad))
-        return parameter
-
-    def set_act_b(
-        self,
-        value: torch.Tensor,
-        *,
-        requires_grad: bool | None = None,
-    ) -> None:
-        if requires_grad is None:
-            requires_grad = self.act_b.requires_grad if hasattr(self, "act_b") else self.signed
-        value = value.to(
-            device=self.act_b.device if hasattr(self, "act_b") else None,
-            dtype=self.act_b.dtype if hasattr(self, "act_b") else None,
-        )
-        self.act_b = self._make_act_b_parameter(value, requires_grad=requires_grad)
 
     def _init_activation_quantization(
         self,
         init_s: float = -10,
         init_q: float = 10,
-        signed: bool = True,
         noise_ratio: float = 1,
         disable: bool = False,
         qnmethod: QNMethod = QNMethod.STE,
     ) -> None:
         self.disable = disable
-        self.signed = signed
 
-        zero_point = 0.0 if not signed else -torch.exp2(torch.tensor(init_q - 1).float())
+        zero_point = -torch.exp2(torch.tensor(init_q - 1).float())
         self._act_b = torch.tensor([zero_point]).float()
         self._log_act_s = torch.tensor([init_s]).float()
         self._log_act_q = torch.tensor([init_q]).float()
         self._noise_ratio = nn.Parameter(torch.tensor([noise_ratio]).float(), requires_grad=False)
 
         self.log_act_q = nn.Parameter(self._log_act_q, requires_grad=True)
-        self.act_b = self._make_act_b_parameter(self._act_b, requires_grad=signed)
+        self.act_b = nn.Parameter(self._act_b, requires_grad=True)
         self.log_act_s = nn.Parameter(self._log_act_s, requires_grad=True)
         self.Q_input = Quantizer(
             self, torch.exp2(self._log_act_s), 0, -inf, inf, qnmethod=qnmethod
