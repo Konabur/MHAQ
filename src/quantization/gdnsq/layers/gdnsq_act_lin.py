@@ -126,12 +126,14 @@ class NoisyActLin(nn.Module):
 
     def _configure_weight_quantizer(self) -> tuple[torch.Tensor, torch.Tensor]:
         scale = torch.exp2(self.log_wght_s)
-        zero_point = self.get_weight_minmax(
-            keepdim=self.qscheme == QScheme.PER_CHANNEL
-        )[0]
+        wmin, wmax = self.get_weight_minmax(keepdim=self.qscheme == QScheme.PER_CHANNEL)
+        qwmin = torch.round(wmin / scale * 2) / 2 * scale
+        qwmax = torch.round(wmax / scale * 2) / 2 * scale
         self.Q.scale = scale
-        self.Q.zero_point = zero_point
-        return scale, zero_point
+        self.Q.zero_point = qwmin
+        self.Q.min_val = qwmin
+        self.Q.max_val = qwmax
+        return scale, qwmin
 
     def quantize_weight(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         scale, zero_point = self._configure_weight_quantizer()
