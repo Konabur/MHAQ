@@ -85,9 +85,6 @@ class NoisyActLin(nn.Module):
     def _get_affine_bias(self) -> torch.Tensor | None:
         raise NotImplementedError
 
-    def _weight_noise_ratio(self) -> torch.Tensor:
-        return self._noise_ratio if self.rand_noise else torch.zeros_like(self._noise_ratio)
-
     def get_weight_minmax(self, keepdim: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         if self.qscheme == QScheme.PER_CHANNEL:
             dims = self._weight_quantization_dims()
@@ -102,9 +99,10 @@ class NoisyActLin(nn.Module):
     def _configure_activation_quantizer(self) -> None:
         s = torch.exp2(self.log_act_s)
         q = torch.exp2(self.log_act_q)
-        self.Q_input.zero_point = self.act_b
-        self.Q_input.min_val = self.act_b
-        self.Q_input.max_val = self.act_b + q - s
+        zp = torch.round(self.act_b / s * 2) / 2 * s
+        self.Q_input.zero_point = zp
+        self.Q_input.min_val = zp
+        self.Q_input.max_val = zp + q - s
         self.Q_input.scale = s
 
     def quantize_input(self, x: torch.Tensor) -> torch.Tensor:
@@ -133,7 +131,6 @@ class NoisyActLin(nn.Module):
         )[0]
         self.Q.scale = scale
         self.Q.zero_point = zero_point
-        self.Q.rnoise_ratio.data = self._weight_noise_ratio()
         return scale, zero_point
 
     def quantize_weight(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
