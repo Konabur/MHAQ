@@ -146,6 +146,20 @@ class _ExactIntegerConv2d(torch.nn.Module):
                 persistent=True,
             )
             self.disable_activation = bool(getattr(activation_module, "disable", False))
+
+            # Precompute activation zero-point with the same rule as
+            # NoisyActLin._configure_activation_quantizer:
+            #   s = 2^{log_act_s}, q = 2^{log_act_q}
+            #   zp = round(act_b / s * 2) / 2 * s
+            # This ensures the integer-path activation matches NoisyActLin.
+            if not self.disable_activation:
+                s_act = torch.exp2(self.log_act_s)
+                act_zp = torch.round(self.act_b / s_act * 2) / 2 * s_act
+                self.register_buffer(
+                    "act_zero_point",
+                    act_zp.detach().clone().to(device=weight.device, dtype=weight.dtype).reshape([]),
+                    persistent=True,
+                )
         else:
             self.log_act_s = None
             self.log_act_q = None
@@ -161,63 +175,28 @@ class _ExactIntegerConv2d(torch.nn.Module):
             padding = self.padding
         return F.conv2d(x, weight, None, self.stride, padding, self.dilation, self.groups)
 
-    def _conv1(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Convolution with an all-ones kernel matching self.weight's shape,
-        implemented via avg_pool2d + channel reduction for efficiency.
-        """
-        n, c, _, _ = x.shape
-        k_h, k_w = self.kernel_size if isinstance(self.kernel_size, tuple) else (self.kernel_size, self.kernel_size)
-        # Avg pooling per channel gives spatial mean over the kernel window
-        pooled = F.avg_pool2d(x, kernel_size=(k_h, k_w), stride=self.stride, padding=self.padding)
-        # Convert to sum over spatial window
-        patch_area = k_h * k_w
-        summed_spatial = pooled * patch_area  # shape: (N, C, H_out, W_out)
-
-        # Sum over channels within each group to match grouped conv with ones kernel
-        groups = self.groups
-        in_per_group = c // groups
-        h_out, w_out = summed_spatial.shape[-2:]
-        summed_spatial = summed_spatial.view(n, groups, in_per_group, h_out, w_out).sum(dim=2)  # (N, G, H_out, W_out)
-
-        # Broadcast per-group result to all out_channels in that group
-        out_channels = self.weight.shape[0]
-        out_per_group = out_channels // groups
-        summed_spatial = summed_spatial.unsqueeze(2).expand(n, groups, out_per_group, h_out, w_out)
-        return summed_spatial.reshape(n, out_channels, h_out, w_out)
-
     def forward(self, x):
-        # apply inline clamp+round first for fp prologue.
         s = torch.exp2(self.log_act_s)
         q = torch.exp2(self.log_act_q)
-        x = torch.clamp(x, min=self.act_b, max=self.act_b + q - s)
-        x = torch.round((x - self.act_b) / s)
+        zp = torch.round(self.act_b / s * 2) / 2 * s
+        wzp = 2 * self.weight_zero_point / self.weight_scale
+        wzp_kernel = wzp.view(-1, 1, 1, 1).expand_as(self.weight)
+        d = self._conv((2 * zp / s) * torch.ones_like(x), 2 * self.weight + wzp_kernel)
 
-        # Integer-weight conv term (uses the stored integer codes unchanged)
-        out_w = self._conv(x, self.weight)
-        out_ones = self._conv1(x)
+        # Activation quantize
+        x = torch.clamp(x, min=zp, max=zp + q - s)
+        x = 2 * (torch.round((x - zp) / s))
 
-        output_weight_scale = self.weight_scale.reshape(1, -1, 1, 1)
-        # Reduce weight_zero_point to one scalar per output channel
-        zp = self.weight_zero_point
-        zp_per_out = zp.view(-1)[: self.weight.shape[0]].view(1, -1, 1, 1)
+        # Integer-valued convolution
+        c1 = self._conv(x, self.weight)
+        c2 = self._conv(x, torch.ones_like(self.weight))
+        out = 2 * c1 + wzp.view(1, -1, 1, 1) * c2
 
-        out = out_w * output_weight_scale + out_ones * zp_per_out
-        out = out * self.input_scale
+        # FP Scale and bias
+        scale = self.input_scale * self.weight_scale.reshape(1, -1, 1, 1) * self.post_scale.view(1, -1, 1, 1) / 4
+        bias = self.bias.view(1, -1, 1, 1) / self.post_scale.view(1, -1, 1, 1) + self.post_shift.view(1, -1, 1, 1) + d * scale
 
-        if not torch.isclose(
-            self.input_zero_point,
-            torch.zeros_like(self.input_zero_point),
-        ).all():
-            # For dequantized weights we use the per-channel weight_scale without reshaping,
-            # so it broadcasts correctly over [out_channels, in_channels, kH, kW].
-            w_dq = self.weight * self.weight_scale + self.weight_zero_point
-            out = out + self.input_zero_point * self._conv(
-                torch.ones_like(x), w_dq
-            )
-
-        out = out + self.bias.view(1, -1, 1, 1)
-        return out * self.post_scale.view(1, -1, 1, 1) + self.post_shift.view(1, -1, 1, 1)
+        return out * scale + bias
 
 
 class _ExactIntegerLinear(torch.nn.Module):
@@ -236,6 +215,7 @@ class _ExactIntegerLinear(torch.nn.Module):
         input_zero_point: torch.Tensor | float,
         weight_scale: torch.Tensor,
         weight_zero_point: torch.Tensor,
+        activation_module: NoisyActLin | None = None,
     ):
         super().__init__()
         del module
@@ -258,16 +238,42 @@ class _ExactIntegerLinear(torch.nn.Module):
             persistent=True,
         )
 
+        # Optional inlined activation quantizer (same math as NoisyActLin).
+        if activation_module is not None:
+            self.register_buffer(
+                "log_act_s",
+                activation_module.log_act_s.detach().clone().to(device=weight.device, dtype=weight.dtype),
+                persistent=True,
+            )
+            self.register_buffer(
+                "log_act_q",
+                activation_module.log_act_q.detach().clone().to(device=weight.device, dtype=weight.dtype),
+                persistent=True,
+            )
+            self.register_buffer(
+                "act_b",
+                activation_module.act_b.detach().clone().to(device=weight.device, dtype=weight.dtype),
+                persistent=True,
+            )
+            self.disable_activation = bool(getattr(activation_module, "disable", False))
+        else:
+            self.log_act_s = None
+            self.log_act_q = None
+            self.act_b = None
+            self.disable_activation = True
+
     def forward(self, x):
-        # Linear path currently assumes the input is already integer-coded.
-        dequantized_input = x * self.input_scale
-        if not torch.isclose(
-            self.input_zero_point,
-            torch.zeros_like(self.input_zero_point),
-        ).all():
-            dequantized_input = dequantized_input + self.input_zero_point
+        # Activation quantize-dequantize (same math as NoisyActLin.quantize_dequantize_input).
+        if not self.disable_activation:
+            s = torch.exp2(self.log_act_s)
+            q = torch.exp2(self.log_act_q)
+            zp = torch.round(self.act_b / s * 2) / 2 * s
+            x = torch.clamp(x, min=zp, max=zp + q - s)
+            x = torch.round((x - zp) / s) * s + zp
+
+        # Weight dequantize (weight_zero_point is qwmin from _configure_weight_quantizer).
         dequantized_weight = self.weight * self.weight_scale + self.weight_zero_point
-        return F.linear(dequantized_input, dequantized_weight, self.bias)
+        return F.linear(x, dequantized_weight, self.bias)
 
 
 def _get_noisy_conv(module):
@@ -288,35 +294,36 @@ def _iter_quantized_affines(root: torch.nn.Module):
 def _get_quantized_weight_params(
     module: NoisyConv2d | NoisyLinear,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Return integer-valued weight codes together with their quantization parameters."""
+    """
+    Return integer-valued weight codes together with their quantization parameters.
+    Uses the same _configure_weight_quantizer as NoisyActLin.forward so the fused
+    math (scale, half-step-snapped zero_point, min/max clamp) matches exactly.
+    """
     weight = module.weight.detach()
-    scale = torch.exp2(module.log_wght_s.detach())
-    module.Q.scale = scale
-
-    if module.qscheme.name == "PER_CHANNEL":
-        reduce_dims = tuple(range(1, weight.dim()))
-        zero_point = weight.amin(dim=reduce_dims, keepdim=True)
-    else:
-        zero_point = weight.amin()
-
-    module.Q.zero_point = zero_point
-    return module.Q.quantize(weight), scale.detach().clone(), zero_point.detach().clone()
+    scale, zero_point = module._configure_weight_quantizer()
+    quantized_weight = module.Q.quantize(weight)
+    return quantized_weight, scale.detach().clone(), zero_point.detach().clone()
 
 
-def _get_effective_bias(module: NoisyConv2d | NoisyLinear) -> torch.Tensor:
-    """Return the effective bias used by the quantized layer."""
+def _get_effective_bias(
+    module: NoisyConv2d | NoisyLinear,
+    weight_scale: torch.Tensor | None = None,
+    weight_zero_point: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """
+    Return the effective bias used by the quantized layer.
+    When quant_bias=True, must pass weight_scale and weight_zero_point from
+    _configure_weight_quantizer so bias quantization matches NoisyActLin.
+    """
     out_features = module.out_channels if isinstance(module, NoisyConv2d) else module.out_features
     if module.bias is None:
         return torch.zeros(out_features, device=module.weight.device, dtype=module.weight.dtype)
 
     if isinstance(module, NoisyConv2d) and getattr(module, "quant_bias", False):
-        s = torch.exp2(module.log_wght_s.detach())
-        if module.qscheme.name == "PER_CHANNEL":
-            zero_point = module.weight.detach().amin((1, 2, 3), keepdim=True)
-        else:
-            zero_point = module.weight.detach().amin()
-        module.Q_b.scale = s.ravel()
-        module.Q_b.zero_point = zero_point.ravel()
+        if weight_scale is None or weight_zero_point is None:
+            weight_scale, weight_zero_point = module._configure_weight_quantizer()
+        module.Q_b.scale = weight_scale.ravel()
+        module.Q_b.zero_point = weight_zero_point.ravel()
         module.Q_b.rnoise_ratio.data = torch.zeros_like(module._noise_ratio)
         return module.Q_b.dequantize(module.Q_b.quantize(module.bias.detach()))
 
@@ -423,7 +430,7 @@ def restore_plain_validation_step(model: torch.nn.Module):
     model.validation_step = type(model).validation_step.__get__(model, type(model))
 
 
-def fuse_batchnorm_and_normalize_activation_scales(model: torch.nn.Module) -> tuple[int, int]:
+def fuse_batchnorm_and_normalize_activation_scales(model: torch.nn.Module) -> int:
     """
     Walk the model once to:
       1) Fuse BatchNorm layers into the preceding NoisyConv2d and remove the BatchNorm from the graph.
@@ -439,7 +446,6 @@ def fuse_batchnorm_and_normalize_activation_scales(model: torch.nn.Module) -> tu
         torch.nn.BatchNorm3d,
     )
     fused_count = 0
-    normalized_count = 0
 
     # Materialize the list of quantized affine sites first to avoid mutating
     # the module hierarchy (removing BatchNorm, replacing children) while
@@ -451,7 +457,7 @@ def fuse_batchnorm_and_normalize_activation_scales(model: torch.nn.Module) -> tu
     # rewrite the node into an exact integer affine module with inlined activation.
     for name, parent, child_name, act, qmodule in affine_sites:
         quantized_weight, weight_scale, weight_zero_point = _get_quantized_weight_params(qmodule)
-        effective_bias = _get_effective_bias(qmodule)
+        effective_bias = _get_effective_bias(qmodule, weight_scale, weight_zero_point)
         ref = quantized_weight  # device/dtype reference
         current_scale = torch.exp2(act.log_act_s.detach()).to(device=ref.device, dtype=ref.dtype)
         current_zero_point = act.act_b.detach().to(device=ref.device, dtype=ref.dtype)
@@ -513,7 +519,8 @@ def fuse_batchnorm_and_normalize_activation_scales(model: torch.nn.Module) -> tu
             )
             parent._modules[child_name] = exact_affine
 
-        normalized_count += 1
+        # Count of normalized activations is no longer returned, but we keep
+        # this transformation for side effects and detailed logging.
         logger.info(
             "Replaced fused activation in %s with inline round-clamp act and exact integer affine: act_scale=%s act_zero_point=%s.",
             name,
@@ -521,7 +528,7 @@ def fuse_batchnorm_and_normalize_activation_scales(model: torch.nn.Module) -> tu
             current_zero_point.cpu().item() if current_zero_point.numel() == 1 else current_zero_point.flatten()[0].cpu().item(),
         )
 
-    return fused_count, normalized_count
+    return fused_count
 
 
 def print_weight_bias_stats(model: torch.nn.Module):
@@ -541,7 +548,7 @@ def print_weight_bias_stats(model: torch.nn.Module):
                 float(mod.input_scale.detach().cpu().item()),
                 float(mod.input_zero_point.detach().cpu().item()),
                 sorted(torch.unique(mod.weight_scale.detach()).cpu().tolist()),
-                sorted(torch.unique((mod.weight_zero_point / mod.weight_scale).detach()).cpu().tolist()),
+                sorted(torch.unique((mod.weight_zero_point / mod.weight_scale * 2).round().detach()).cpu().tolist()),
             )
 
 
@@ -567,8 +574,11 @@ def main():
     if use_cuda:
         qmodel = qmodel.to("cuda")
 
-    n_fused = fuse_batchnorm_and_normalize_activation_scales(qmodel)
-    logger.info("Fused %d BatchNorm layer(s) into previous NoisyConv2d and removed from graph.", n_fused)
+    n_fused_batchnorm = fuse_batchnorm_and_normalize_activation_scales(qmodel)
+    logger.info(
+        "Fused %d BatchNorm layer(s) into previous NoisyConv2d and removed from graph.",
+        n_fused_batchnorm,
+    )
     restore_plain_validation_step(qmodel)
 
     root = _get_model_root(qmodel)
