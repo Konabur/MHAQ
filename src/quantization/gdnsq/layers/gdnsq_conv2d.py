@@ -33,6 +33,8 @@ class NoisyConv2d(NoisyActLin, nn.Conv2d):
         act_init_s: float = -10,
         act_init_q: float = 10,
         qnmethod: QNMethod = QNMethod.AEWGS,
+        weight_guard_bit: int = 0,
+        act_guard_bit: int = 0,
     ) -> None:
         nn.Conv2d.__init__(
             self,
@@ -49,19 +51,19 @@ class NoisyConv2d(NoisyActLin, nn.Conv2d):
             dtype,
         )
         # 'signed' is kept for backward compatibility but currently ignored.
-        self._init_activation_quantization(
-            init_s=act_init_s,
-            init_q=act_init_q,
-            disable=disable,
-        )
-        self._init_weight_quantization(
+        self._init_noisy_actlin(
             qscheme=qscheme,
             log_s_init=log_s_init,
             rand_noise=rand_noise,
-            qnmethod=qnmethod,
-            per_channel_shape=(out_channels, 1, 1, 1),
             quant_bias=quant_bias,
             bias_log_shape=(1,),
+            disable=disable,
+            act_init_s=act_init_s,
+            act_init_q=act_init_q,
+            qnmethod=qnmethod,
+            per_channel_shape=(out_channels, 1, 1, 1),
+            weight_guard_bit=weight_guard_bit,
+            act_guard_bit=act_guard_bit,
         )
 
     def _weight_quantization_dims(self) -> tuple[int, ...]:

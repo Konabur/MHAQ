@@ -474,6 +474,8 @@ class GDNSQQuant(BaseQuant):
             self.quant_config = self.config.quantization
             self.act_bit = self.quant_config.act_bit
             self.weight_bit = self.quant_config.weight_bit
+            self.weight_guard_bit = self.quant_config.weight_guard_bit
+            self.act_guard_bit = self.quant_config.act_guard_bit
             self.excluded_layers = self.quant_config.excluded_layers
             self.qscheme = self.quant_config.qscheme
             self.quant_bias = self.quant_config.quantize_bias
@@ -529,6 +531,8 @@ class GDNSQQuant(BaseQuant):
             signed=signed_activations,
             disable=disable_activations,
             qnmethod=self.qnmethod,
+            weight_guard_bit=self.weight_guard_bit,
+            act_guard_bit=self.act_guard_bit,
         )
 
     def _quantize_module_linear(
@@ -546,5 +550,7 @@ class GDNSQQuant(BaseQuant):
             log_s_init=-12,
             signed=signed_activations,
             disable=disable_activations,
-            qnmethod=self.qnmethod
+            qnmethod=self.qnmethod,
+            weight_guard_bit=self.weight_guard_bit,
+            act_guard_bit=self.act_guard_bit,
         )

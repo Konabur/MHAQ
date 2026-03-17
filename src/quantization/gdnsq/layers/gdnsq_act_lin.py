@@ -9,21 +9,36 @@ from src.quantization.gdnsq.gdnsq_utils import QNMethod
 
 class NoisyActLin(nn.Module):
 
-    def _init_activation_quantization(
+    def _init_noisy_actlin(
         self,
-        init_s: float = -10,
-        init_q: float = 10,
-        noise_ratio: float = 1,
+        *,
+        qscheme: QScheme,
+        log_s_init: float,
+        rand_noise: bool,
+        quant_bias: bool = False,
+        bias_log_shape: tuple[int, ...] | None = None,
         disable: bool = False,
+        act_init_s: float = -10,
+        act_init_q: float = 10,
         qnmethod: QNMethod = QNMethod.STE,
+        per_channel_shape: tuple[int, ...],
+        weight_guard_bit: int = 0,
+        act_guard_bit: int = 0,
     ) -> None:
+        """
+        Common initialization for activation and weight quantization used by
+        NoisyLinear/NoisyConv2d subclasses.
+        """
+        # Store guard bits for later use in quantization math or hardware export.
+        self.weight_guard_bit = int(weight_guard_bit)
+        self.act_guard_bit = int(act_guard_bit)
+        # Inline activation quantization init
         self.disable = disable
-
-        zero_point = -torch.exp2(torch.tensor(init_q - 1).float())
+        zero_point = -torch.exp2(torch.tensor(act_init_q - 1).float())
         self._act_b = torch.tensor([zero_point]).float()
-        self._log_act_s = torch.tensor([init_s]).float()
-        self._log_act_q = torch.tensor([init_q]).float()
-        self._noise_ratio = nn.Parameter(torch.tensor([noise_ratio]).float(), requires_grad=False)
+        self._log_act_s = torch.tensor([act_init_s]).float()
+        self._log_act_q = torch.tensor([act_init_q]).float()
+        self._noise_ratio = nn.Parameter(torch.tensor([1.0]).float(), requires_grad=False)
 
         self.log_act_q = nn.Parameter(self._log_act_q, requires_grad=True)
         self.act_b = nn.Parameter(self._act_b, requires_grad=True)
@@ -33,19 +48,8 @@ class NoisyActLin(nn.Module):
         )
         self.bw = torch.tensor(0.0)
 
-    def _init_weight_quantization(
-        self,
-        *,
-        qscheme: QScheme,
-        log_s_init: float,
-        rand_noise: bool,
-        qnmethod: QNMethod,
-        per_channel_shape: tuple[int, ...],
-        quant_bias: bool = False,
-        bias_log_shape: tuple[int, ...] | None = None,
-    ) -> None:
+        # Inline weight quantization init
         self.qscheme = qscheme
-
         if self.qscheme == QScheme.PER_TENSOR:
             self.log_wght_s = nn.Parameter(torch.tensor([log_s_init]).float(), requires_grad=True)
         elif self.qscheme == QScheme.PER_CHANNEL:
@@ -99,7 +103,8 @@ class NoisyActLin(nn.Module):
     def _configure_activation_quantizer(self) -> None:
         s = torch.exp2(self.log_act_s)
         q = torch.exp2(self.log_act_q)
-        zp = torch.round(self.act_b / s * 2) / 2 * s
+        guard_ratio = 2 ** self.act_guard_bit
+        zp = torch.round(self.act_b / s * guard_ratio) / guard_ratio * s
         self.Q_input.zero_point = zp
         self.Q_input.min_val = zp
         self.Q_input.max_val = zp + q - s
@@ -127,8 +132,9 @@ class NoisyActLin(nn.Module):
     def _configure_weight_quantizer(self) -> tuple[torch.Tensor, torch.Tensor]:
         scale = torch.exp2(self.log_wght_s)
         wmin, wmax = self.get_weight_minmax(keepdim=self.qscheme == QScheme.PER_CHANNEL)
-        qwmin = torch.round(wmin / scale * 2) / 2 * scale
-        qwmax = torch.round(wmax / scale * 2) / 2 * scale
+        guard_ratio = 2 ** self.weight_guard_bit
+        qwmin = torch.round(wmin / scale * guard_ratio) / guard_ratio * scale
+        qwmax = torch.round(wmax / scale * guard_ratio) / guard_ratio * scale
         self.Q.scale = scale
         self.Q.zero_point = qwmin
         self.Q.min_val = qwmin
@@ -152,11 +158,6 @@ class NoisyActLin(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         qweight, scale, zero_point = self.quantize_weight()
         return self.dequantize_weight(qweight, scale, zero_point), scale, zero_point
-
-    def _expand_weight_zero_point(self, zero_point: torch.Tensor) -> torch.Tensor:
-        if zero_point.numel() == 1 or self.qscheme == QScheme.PER_CHANNEL:
-            return zero_point.expand_as(self.weight)
-        return zero_point
 
     def quantize_dequantize_bias(
         self,

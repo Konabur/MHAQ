@@ -25,20 +25,24 @@ class NoisyLinear(NoisyActLin, nn.Linear):
         act_init_s: float = -10,
         act_init_q: float = 10,
         qnmethod: QNMethod = QNMethod.STE,
+        weight_guard_bit: int = 0,
+        act_guard_bit: int = 0,
     ) -> None:
         nn.Linear.__init__(self, in_features, out_features, bias, device, dtype)
         # 'signed' is kept for backward compatibility but currently ignored.
-        self._init_activation_quantization(
-            init_s=act_init_s,
-            init_q=act_init_q,
-            disable=disable,
-        )
-        self._init_weight_quantization(
+        self._init_noisy_actlin(
             qscheme=qscheme,
             log_s_init=log_s_init,
             rand_noise=rand_noise,
+            quant_bias=False,
+            bias_log_shape=None,
+            disable=disable,
+            act_init_s=act_init_s,
+            act_init_q=act_init_q,
             qnmethod=qnmethod,
             per_channel_shape=(out_features, 1),
+            weight_guard_bit=weight_guard_bit,
+            act_guard_bit=act_guard_bit,
         )
 
     def _weight_quantization_dims(self) -> tuple[int, ...]:
@@ -57,8 +61,6 @@ class NoisyLinear(NoisyActLin, nn.Linear):
 
     def extra_repr(self) -> str:
         bias = is_biased(self)
-        # log_wght_s = self.log_wght_s.item()
-        # noise_ratio = self._noise_ratio.item()
 
         log_wght_s = self.log_wght_s
         noise_ratio = self._weight_noise_ratio()
