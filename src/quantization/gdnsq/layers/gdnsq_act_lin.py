@@ -63,17 +63,6 @@ class NoisyActLin(nn.Module):
             self, torch.exp2(self.log_wght_s), 0, -inf, inf, qnmethod=qnmethod
         )
         self.rand_noise = rand_noise
-        self.quant_bias = quant_bias
-
-        if self.quant_bias:
-            if bias_log_shape is None:
-                raise ValueError("bias_log_shape must be provided when quant_bias=True")
-            self.log_b_s = nn.Parameter(
-                torch.empty(bias_log_shape).fill_(log_s_init), requires_grad=True
-            )
-            self.Q_b = Quantizer(
-                self, torch.exp2(self.log_b_s), 0, -inf, inf, qnmethod=qnmethod
-            )
 
     def _weight_quantization_dims(self) -> tuple[int, ...]:
         raise NotImplementedError
@@ -165,13 +154,9 @@ class NoisyActLin(nn.Module):
         scale: torch.Tensor,
         zero_point: torch.Tensor,
     ) -> torch.Tensor | None:
-        if bias is None or not getattr(self, "quant_bias", False):
-            return bias
-
-        self.Q_b.scale = scale.ravel()
-        self.Q_b.zero_point = zero_point.ravel()
-        self.Q_b.rnoise_ratio.data = self._weight_noise_ratio()
-        return self.Q_b.dequantize(self.Q_b.quantize(bias))
+        # Bias quantization support has been removed; return the original bias
+        # unchanged so behaviour falls back to standard (non-quantized) bias.
+        return bias
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         bias = self._get_affine_bias()

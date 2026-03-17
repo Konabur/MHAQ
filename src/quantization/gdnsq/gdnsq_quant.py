@@ -478,7 +478,8 @@ class GDNSQQuant(BaseQuant):
             self.act_guard_bit = self.quant_config.act_guard_bit
             self.excluded_layers = self.quant_config.excluded_layers
             self.qscheme = self.quant_config.qscheme
-            self.quant_bias = self.quant_config.quantize_bias
+            # Bias quantization has been removed; always disable it.
+            self.quant_bias = False
 
     def _quantize_module(self, module, signed_activations):
         self.qnmethod = QNMethod[self.quant_config.params.qnmethod]

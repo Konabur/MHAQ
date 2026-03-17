@@ -51,7 +51,6 @@ class QuantizationConfig(BaseModel):
     calibration: Optional[CalibrationConfig] = None
     freeze_batchnorm: Optional[bool] = False
     fuse_batchnorm: Optional[bool] = False
-    quantize_bias: Optional[bool] = False
     params: Optional[GDNSQQuantizerParams | Dict[str, Any]] = None
 
     @model_validator(mode="after")
