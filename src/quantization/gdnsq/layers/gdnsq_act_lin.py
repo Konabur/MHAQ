@@ -148,7 +148,7 @@ class NoisyActLin(nn.Module):
         # Bias can be None (no affine offset).
         norm_bias = None
         if bias is not None:
-            norm_bias = bias / scale
+            norm_bias = bias.view(-1) / scale.view(-1)
 
         # Work in fixpoint domain except bias.
         fix_point_out = self._apply_affine(
