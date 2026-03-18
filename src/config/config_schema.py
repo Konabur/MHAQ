@@ -43,7 +43,7 @@ class QuantizationConfig(BaseModel):
     name: str
     act_bit: int
     weight_bit: int
-    weight_guard_bit: Optional[int] = 0
+    weight_guard_bit: Optional[int] = 8
     act_guard_bit: Optional[int] = 0
     qmethod: QMethod = QMethod.GDNSQ
     qscheme: Optional[QScheme] = QScheme.PER_CHANNEL
