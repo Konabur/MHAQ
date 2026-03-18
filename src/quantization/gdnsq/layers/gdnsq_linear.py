@@ -34,8 +34,6 @@ class NoisyLinear(NoisyActLin, nn.Linear):
             qscheme=qscheme,
             log_s_init=log_s_init,
             rand_noise=rand_noise,
-            quant_bias=False,
-            bias_log_shape=None,
             disable=disable,
             act_init_s=act_init_s,
             act_init_q=act_init_q,
@@ -63,9 +61,8 @@ class NoisyLinear(NoisyActLin, nn.Linear):
         bias = is_biased(self)
 
         log_wght_s = self.log_wght_s
-        noise_ratio = self._weight_noise_ratio()
 
         return (
             f"in_features={self.in_features}, out_features={self.out_features}, bias={bias},\n"
-            f"log_wght_s={log_wght_s}, noise_ratio={noise_ratio}"
+            f"log_wght_s={log_wght_s}"
         )

@@ -50,13 +50,12 @@ class NoisyConv2d(NoisyActLin, nn.Conv2d):
             device,
             dtype,
         )
+        self.quant_bias = bool(quant_bias)
         # 'signed' is kept for backward compatibility but currently ignored.
         self._init_noisy_actlin(
             qscheme=qscheme,
             log_s_init=log_s_init,
             rand_noise=rand_noise,
-            quant_bias=quant_bias,
-            bias_log_shape=(1,),
             disable=disable,
             act_init_s=act_init_s,
             act_init_q=act_init_q,
@@ -83,14 +82,12 @@ class NoisyConv2d(NoisyActLin, nn.Conv2d):
     def extra_repr(self) -> str:
         bias = is_biased(self)
         # log_wght_s = self.log_wght_s.item()
-        # noise_ratio = self._noise_ratio.item()
 
         log_wght_s = self.log_wght_s
-        noise_ratio = self._weight_noise_ratio()
 
         return (
             f"in_channels={self.in_channels}, out_channels={self.out_channels}, kernel_size={self.kernel_size},\n"
             f"stride={self.stride}, padding={self.padding}, dilation={self.dilation},\n"
             f"groups={self.groups}, bias={bias}, log_wght_s_mean={log_wght_s.mean()},\n"
-            f"noise_ratio={noise_ratio}, quantized_bias={self.quant_bias}"
+            f"quantized_bias={self.quant_bias}"
         )

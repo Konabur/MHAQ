@@ -80,7 +80,6 @@ class GDNSQQuant(BaseQuant):
         )
 
         # The part where original LModule structure gets changed
-        qmodel._noise_ratio = torch.tensor(1.0)
         qmodel.qscheme = self.qscheme
 
         if self.config.quantization.params.distillation:
@@ -98,8 +97,6 @@ class GDNSQQuant(BaseQuant):
                 a=self.act_bit,
                 w=self.weight_bit,
             )
-
-        qmodel.noise_ratio = GDNSQQuant.noise_ratio.__get__(qmodel, type(qmodel))
 
         # Important step. Replacing training and validation steps
         # with alternated ones.
@@ -180,14 +177,6 @@ class GDNSQQuant(BaseQuant):
         conv.bias = nn.Parameter(beta + (b - mu) * scale)
 
         attrsetter(bn_name)(model, nn.Identity())  # Replacing bn module with Identity
-
-    @staticmethod
-    def noise_ratio(self, x=None):
-        if x != None:
-            for module in self.modules():
-                if hasattr(module, "_noise_ratio"):
-                    module._noise_ratio.data = x.clone().detach()
-        return self._noise_ratio
 
     @staticmethod
     def noisy_train_decorator(train_step):
@@ -384,7 +373,6 @@ class GDNSQQuant(BaseQuant):
         inputs, targets = val_batch
 
         # targets = self.tmodel(inputs)
-        # self.noise_ratio(0.0)
         outputs = GDNSQQuant.noisy_step(self, inputs)
 
         # Oh, I hate this, but here we goo
@@ -459,7 +447,6 @@ class GDNSQQuant(BaseQuant):
     @staticmethod
     def noisy_test_step(self, test_batch, test_index):
         inputs, targets = test_batch
-        # self.noise_ratio(0.0)
         outputs = GDNSQQuant.noisy_step(self, inputs)
 
         test_loss = self.criterion(outputs[0], targets)
