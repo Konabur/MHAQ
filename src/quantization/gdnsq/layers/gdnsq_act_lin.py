@@ -15,8 +15,6 @@ class NoisyActLin(nn.Module):
         qscheme: QScheme,
         log_s_init: float,
         rand_noise: bool,
-        quant_bias: bool = False,
-        bias_log_shape: tuple[int, ...] | None = None,
         disable: bool = False,
         act_init_s: float = -10,
         act_init_q: float = 10,
@@ -89,78 +87,77 @@ class NoisyActLin(nn.Module):
             return self.weight.amin(), self.weight.amax()
         raise NotImplementedError(f"Unsupported qscheme {self.qscheme}")
 
-    def _configure_activation_quantizer(self) -> None:
+    def _configure_activation_quantizer(self) -> tuple[torch.Tensor, torch.Tensor]:
         s = torch.exp2(self.log_act_s)
         q = torch.exp2(self.log_act_q)
         guard_ratio = 2 ** self.act_guard_bit
-        zp = torch.round(self.act_b / s * guard_ratio) / guard_ratio * s
+        qzp = torch.round(self.act_b / s * guard_ratio) 
+        zp = qzp / guard_ratio * s
         self.Q_input.zero_point = zp
         self.Q_input.min_val = zp
         self.Q_input.max_val = zp + q - s
         self.Q_input.scale = s
+        return s, qzp / guard_ratio
 
-    def quantize_input(self, x: torch.Tensor) -> torch.Tensor:
+    def quantize_input(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Quantize the input tensor and return:
+          - quantized codes
+          - activation scale
+          - activation quantization zero-point
+        """
         if self.disable:
-            return x
+            # No activation quantization: behave as identity with unit scale.
+            scale = torch.tensor(1.0, device=x.device, dtype=x.dtype)
+            zero_point = torch.tensor(0.0, device=x.device, dtype=x.dtype)
+            return x, scale, zero_point
 
-        self._configure_activation_quantizer()
+        scale, q_zero_point = self._configure_activation_quantizer()
         qx = self.Q_input.quantize(x)
         if not self.training:
             minmax = qx.aminmax()
             self.bw = torch.log2(minmax.max - minmax.min + 1)
-        return qx
 
-    def dequantize_input(self, qx: torch.Tensor) -> torch.Tensor:
-        if self.disable:
-            return qx
-        return self.Q_input.dequantize(qx)
-
-    def quantize_dequantize_input(self, x: torch.Tensor) -> torch.Tensor:
-        return self.dequantize_input(self.quantize_input(x))
+        return qx, scale, q_zero_point
 
     def _configure_weight_quantizer(self) -> tuple[torch.Tensor, torch.Tensor]:
         scale = torch.exp2(self.log_wght_s)
         wmin, wmax = self.get_weight_minmax(keepdim=self.qscheme == QScheme.PER_CHANNEL)
         guard_ratio = 2 ** self.weight_guard_bit
-        qwmin = torch.round(wmin / scale * guard_ratio) / guard_ratio * scale
-        qwmax = torch.round(wmax / scale * guard_ratio) / guard_ratio * scale
+        qwmin = torch.round(wmin / scale * guard_ratio) 
+        qwmax = torch.round(wmax / scale * guard_ratio) 
         self.Q.scale = scale
-        self.Q.zero_point = qwmin
-        self.Q.min_val = qwmin
-        self.Q.max_val = qwmax
-        return scale, qwmin
+        self.Q.min_val = qwmin / guard_ratio * scale
+        self.Q.max_val = qwmax / guard_ratio * scale
+        self.Q.zero_point = self.Q.min_val
+        return scale, qwmin / guard_ratio
 
     def quantize_weight(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        scale, zero_point = self._configure_weight_quantizer()
-        return self.Q.quantize(self.weight), scale, zero_point
+        scale, q_zero_point = self._configure_weight_quantizer()
+        return self.Q.quantize(self.weight), scale, q_zero_point
 
-    def dequantize_weight(
-        self,
-        qweight: torch.Tensor,
-        scale: torch.Tensor,
-        zero_point: torch.Tensor,
-    ) -> torch.Tensor:
-        return qweight * scale + zero_point
-
-    def quantize_dequantize_weight(
-        self,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        qweight, scale, zero_point = self.quantize_weight()
-        return self.dequantize_weight(qweight, scale, zero_point), scale, zero_point
-
-    def quantize_dequantize_bias(
-        self,
-        bias: torch.Tensor | None,
-        scale: torch.Tensor,
-        zero_point: torch.Tensor,
-    ) -> torch.Tensor | None:
-        # Bias quantization support has been removed; return the original bias
-        # unchanged so behaviour falls back to standard (non-quantized) bias.
-        return bias
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         bias = self._get_affine_bias()
-        input = self.quantize_dequantize_input(input)
-        weight, scale, zero_point = self.quantize_dequantize_weight()
-        bias = self.quantize_dequantize_bias(bias, scale, zero_point)
-        return self._apply_affine(input, weight, bias)
+        q_input, act_scale, act_quant_zero_point = self.quantize_input(input)
+        q_weight, weight_scale, weight_quant_zero_point = self.quantize_weight()
+        scale = weight_scale * act_scale
+
+        # Bias can be None (no affine offset).
+        norm_bias = None
+        if bias is not None:
+            norm_bias = bias / scale
+
+        # Work in fixpoint domain except bias.
+        fix_point_out = self._apply_affine(
+            q_input + act_quant_zero_point,
+            q_weight + weight_quant_zero_point,
+            norm_bias,
+        )
+
+        # Broadcast weight_scale over the output channel dimension only.
+        scale = scale.view(1, -1, *([1] * (self.weight.dim() - 2)))
+
+        return fix_point_out * scale
