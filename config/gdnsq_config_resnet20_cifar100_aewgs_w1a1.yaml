@@ -47,8 +47,6 @@ quantization:
   qscheme: 1 # 0 for per-tensor, 1 for per-channel
   act_bit: 1
   weight_bit: 1
-  weight_guard_bit: 8
-  act_guard_bit: 0
   freeze_batchnorm: False
   fuse_batchnorm: False
   excluded_layers:
