@@ -236,10 +236,20 @@ class GDNSQQuant(BaseQuant):
                         metric_name = metric[0]
                     else:
                         metric_name = metric
-                    self.log(f"Metric/ns_{metric_name}", 
-                             metric_value * model_stats.is_converged(self), 
-                             prog_bar=False,
-                             sync_dist=True)
+                    # Log both gated (`ns_`) and raw metrics.
+                    converged = model_stats.is_converged(self)
+                    self.log(
+                        f"Metric/{metric_name}",
+                        metric_value,
+                        prog_bar=False,
+                        sync_dist=True,
+                    )
+                    self.log(
+                        f"Metric/ns_{metric_name}",
+                        metric_value * converged,
+                        prog_bar=False,
+                        sync_dist=True,
+                    )
 
 
             self.log("Loss/Validation loss", loss, prog_bar=False, sync_dist=True)
