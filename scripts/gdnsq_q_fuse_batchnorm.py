@@ -18,7 +18,6 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 import torch
 import argparse
 import torch.nn.functional as F
-from collections import OrderedDict
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
@@ -82,16 +81,19 @@ def parse_args():
 
 class _ExactIntegerConv2d(torch.nn.Module):
     """
-    Exact integer-input replacement for NoisyConv2d, with optional inlined
-    activation quantization parameters so that activation and affine are a
-    single module.
+    Exact integer-input replacement for NoisyConv2d with inlined activation quant.
+
+    The activation integer zero-point offset is folded using a **position-independent**
+    correction: for constant code-domain input ``azp``, each output channel of
+    ``conv(azp * 1, guard_w * w + wzp)`` equals ``azp * sum(guard_w * w + wzp)`` over
+    that channel's kernel (ignoring padding / border effects). That yields a 1×C×1×1
+    bias instead of a full-resolution map (which would track image size).
     """
 
     def __init__(
         self,
         module: NoisyConv2d,
         in_scale: torch.Tensor,
-        input_hw: tuple[int, int],
         post_scale: torch.Tensor | None = None,
         post_shift: torch.Tensor | None = None,
     ):
@@ -144,14 +146,11 @@ class _ExactIntegerConv2d(torch.nn.Module):
         )
         bias_base = b.view(1, -1, 1, 1) / p_scale.view(1, -1, 1, 1) + p_shift.view(1, -1, 1, 1)
 
-        # Precompute the x-value-independent, input-shape-dependent correction term once,
-        # and the full spatial bias term (bias_base + d * fp_scale).
-        # Note: this depends on (C,H,W) due to padding/border effects.
-        h, w_in = int(input_hw[0]), int(input_hw[1])
         wzp_kernel = wzp.view(-1, 1, 1, 1).expand_as(w)
-        ones = torch.ones((1, int(module.in_channels), h, w_in), device=w.device, dtype=w.dtype)
-        d_base = self._conv(azp * ones, guard_w * w + wzp_kernel)
-        bias_full = bias_base + d_base * fp_scale
+        wk = guard_w * w + wzp_kernel
+        d_per_out_ch = azp * wk.sum(dim=(1, 2, 3))
+        bias_spatial = (d_per_out_ch.view(1, -1, 1, 1) * fp_scale)
+        bias_full = bias_base + bias_spatial
 
         # Register buffers at the end.
         self.register_buffer("weight", w.detach().clone().to(device=w.device, dtype=w.dtype), persistent=True)
@@ -226,97 +225,18 @@ def _get_quantized_weight_params(
 def _make_exact_integer_affine_from_quantized(
     module: NoisyConv2d | NoisyLinear,
     input_scale: torch.Tensor,
-    input_hw: tuple[int, int],
     post_scale: torch.Tensor | None = None,
     post_shift: torch.Tensor | None = None,
 ) -> torch.nn.Module:
     if isinstance(module, NoisyConv2d):
-        return _ExactIntegerConv2d(
-            module,
-            input_scale,
-            input_hw,
-            post_scale,
-            post_shift,
-        )
+        return _ExactIntegerConv2d(module, input_scale, post_scale, post_shift)
     raise ValueError(f"Unsupported module type: {type(module)}")
 
 def _get_model_root(model: torch.nn.Module) -> torch.nn.Module:
     return model.model if hasattr(model, "model") else model
 
 
-def _get_model_device(model: torch.nn.Module) -> torch.device:
-    return next(model.parameters()).device
-
-
-def _get_batch_inputs(batch):
-    if isinstance(batch, (list, tuple)):
-        return batch[0]
-    return batch
-
-
-def _get_first_validation_batch(datamodule):
-    if hasattr(datamodule, "setup"):
-        for stage in ("test", "validate", "fit", None):
-            try:
-                datamodule.setup(stage=stage)
-                break
-            except TypeError:
-                datamodule.setup(stage)
-                break
-            except Exception:
-                continue
-
-    val_loader = datamodule.val_dataloader()
-    if isinstance(val_loader, dict):
-        first_key = next(iter(val_loader))
-        val_loader = val_loader[first_key]
-    elif isinstance(val_loader, (list, tuple)):
-        val_loader = val_loader[0]
-
-    return next(iter(val_loader))
-
-
-def _record_noisyconv2d_input_hw(model: torch.nn.Module, datamodule) -> dict[str, tuple[int, int]]:
-    """
-    XXX: hack as model does not have a batch dimension
-    Record (H, W) of the tensor input to every NoisyConv2d module in module order,
-    by running a single real batch through the model.
-    """
-    root = _get_model_root(model)
-    device = _get_model_device(model)
-    batch = _get_first_validation_batch(datamodule)
-    x = _get_batch_inputs(batch)
-    if not torch.is_tensor(x):
-        raise TypeError(f"Expected tensor batch inputs, got {type(x)}")
-    x = x.to(device)
-
-    input_hw_by_name: dict[str, tuple[int, int]] = {}
-    hooks = []
-
-    for name, m in root.named_modules():
-        if isinstance(m, NoisyConv2d):
-            def _make_hook(nm: str):
-                def _hook(mod, inputs, output):
-                    if not inputs:
-                        return
-                    t = inputs[0]
-                    if torch.is_tensor(t) and t.dim() == 4:
-                        input_hw_by_name[nm] = (int(t.shape[2]), int(t.shape[3]))
-                return _hook
-            hooks.append(m.register_forward_hook(_make_hook(name)))
-
-    with torch.no_grad():
-        _ = model(x)
-
-    for h in hooks:
-        h.remove()
-
-    return input_hw_by_name
-
-
-def fuse_batchnorm_and_normalize_activation_scales(
-    model: torch.nn.Module, input_hw_by_module_name: dict[str, tuple[int, int]]
-) -> int:
+def fuse_batchnorm_and_normalize_activation_scales(model: torch.nn.Module) -> int:
     """
     Walk the model once to:
       1) Fuse BatchNorm layers into the preceding NoisyConv2d and remove the BatchNorm from the graph.
@@ -388,15 +308,9 @@ def fuse_batchnorm_and_normalize_activation_scales(
                     )
 
         with torch.no_grad():
-            input_hw = None
-            if isinstance(qmodule, NoisyConv2d):
-                input_hw = input_hw_by_module_name.get(name)
-                if input_hw is None:
-                    raise RuntimeError(f"Missing recorded input HW for module {name}")
             exact_affine = _make_exact_integer_affine_from_quantized(
                 qmodule,
                 current_scale,
-                input_hw if input_hw is not None else (1, 1),
                 post_scale,
                 post_shift,
             )
@@ -449,8 +363,7 @@ def main():
     if use_cuda:
         qmodel = qmodel.to("cuda")
 
-    input_hw_by_name = _record_noisyconv2d_input_hw(qmodel, data)
-    n_fused_batchnorm = fuse_batchnorm_and_normalize_activation_scales(qmodel, input_hw_by_name)
+    n_fused_batchnorm = fuse_batchnorm_and_normalize_activation_scales(qmodel)
     logger.info(
         "Fused %d BatchNorm layer(s) into previous NoisyConv2d and removed from graph.",
         n_fused_batchnorm,
