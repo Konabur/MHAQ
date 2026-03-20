@@ -172,3 +172,7 @@ class COCODataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             collate_fn=self.collate_fn,
         )
+
+    def predict_dataloader(self):
+        # Reuse the validation dataloader for prediction.
+        return self.val_dataloader()
