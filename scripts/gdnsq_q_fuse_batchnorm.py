@@ -46,6 +46,15 @@ def _disable_tracing(config):
         pass
 
 
+def _config_for_fuse_validation(config):
+    """
+    Fused models drop NoisyConv2d / NoisyActLin; training callbacks that call
+    model_stats.is_converged() must not run. Use a config copy with no callbacks.
+    """
+    t = config.training.model_copy(update={"callbacks": {}})
+    return config.model_copy(update={"training": t})
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Fuse BatchNorm, normalize activation scales, validate, print stats, save fused checkpoint."
@@ -425,7 +434,7 @@ def main():
     dataset_composer = DatasetComposer(config=config)
     model_composer = ModelComposer(config=config)
     quantizer = Quantizer(config=config)()
-    validator = Validator(config=config)
+    validator = Validator(config=_config_for_fuse_validation(config))
 
     data = dataset_composer.compose()
     model = model_composer.compose()
