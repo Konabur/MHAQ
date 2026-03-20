@@ -9,7 +9,7 @@ from src.quantization.abc.abc_quant import BaseQuant
 from src.quantization.gdnsq.layers.gdnsq_conv2d import NoisyConv2d
 from src.quantization.gdnsq.layers.gdnsq_linear import NoisyLinear
 from src.quantization.gdnsq.utils.model_helper import ModelHelper
-from src.quantization.gdnsq.gdnsq_loss import PotentialLoss, PotentialLossNoPred
+from src.quantization.gdnsq.gdnsq_loss import PotentialLoss
 from src.quantization.gdnsq.gdnsq_utils import QNMethod
 from src.quantization.gdnsq.utils import model_stats
 from src.aux.qutils import attrsetter, is_biased
@@ -65,6 +65,7 @@ class GDNSQQuant(BaseQuant):
 
     def quantize(self, lmodel: pl.LightningModule, in_place=False):
         self.fusebn = self.config.quantization.fuse_batchnorm
+        curriculum = self.config.quantization.params.curriculum
         if self.config.quantization.params.distillation:
             if not self.config.quantization.params.distillation_teacher:
                 tmodel = deepcopy(lmodel).eval()
@@ -84,19 +85,15 @@ class GDNSQQuant(BaseQuant):
 
         if self.config.quantization.params.distillation:
             qmodel.tmodel = tmodel.requires_grad_(False)
-            qmodel.wrapped_criterion = PotentialLoss(
-                criterion=self.get_loss(qmodel=qmodel),
-                p=1,
-                a=self.act_bit,
-                w=self.weight_bit,
-            )
-        else:
-            qmodel.wrapped_criterion = PotentialLossNoPred(
-                criterion=self.get_loss(qmodel=qmodel),
-                p=1,
-                a=self.act_bit,
-                w=self.weight_bit,
-            )
+        qmodel.wrapped_criterion = PotentialLoss(
+            criterion=self.get_loss(qmodel=qmodel),
+            p=1,
+            a=self.act_bit,
+            w=self.weight_bit,
+            curriculum_enable=curriculum.enable,
+            curriculum_mean=curriculum.mean,
+            curriculum_std=curriculum.std,
+        )
 
         # Important step. Replacing training and validation steps
         # with alternated ones.
