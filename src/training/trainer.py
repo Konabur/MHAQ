@@ -384,3 +384,25 @@ class Validator(Trainer):
         return super().test(
             model, dataloaders, ckpt_path, verbose, datamodule, weights_only
         )
+
+    @rank_zero_only
+    def predict(
+        self,
+        model: pl.LightningModule | None = None,
+        dataloaders=None,
+        datamodule: pl.LightningDataModule | None = None,
+        return_predictions: bool | None = None,
+        ckpt_path: Path | str | None = None,
+        weights_only: bool | None = None,
+    ):
+        # Lightning `predict()` can run distributed barriers during `prepare_data()`.
+        # This repo destroys the process group during `test()`, so all ranks must not
+        # enter `predict()` after `test()` has run on only rank 0.
+        return super().predict(
+            model=model,
+            dataloaders=dataloaders,
+            datamodule=datamodule,
+            return_predictions=return_predictions,
+            ckpt_path=ckpt_path,
+            weights_only=weights_only,
+        )
