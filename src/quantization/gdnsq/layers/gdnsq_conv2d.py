@@ -28,7 +28,6 @@ class NoisyConv2d(NoisyActLin, nn.Conv2d):
         log_s_init: float = -12,
         rand_noise: bool = False,
         quant_bias: bool = False,
-        signed: bool = True,
         disable: bool = False,
         act_init_s: float = -10,
         act_init_q: float = 10,

@@ -123,12 +123,7 @@ class GDNSQQuant(BaseQuant):
                     self.fuse_conv_bn(
                         qmodel.model, layer, layer_names[layer_names.index(layer) + 1]
                     )
-                if issubclass(
-                    preceding_layer_type, (nn.ReLU)
-                ):  # XXX: hack shoul be changed through config
-                    qmodule = self._quantize_module(module, signed_activations=False)
-                else:
-                    qmodule = self._quantize_module(module, signed_activations=True)
+                qmodule = self._quantize_module(module)
 
                 attrsetter(layer)(qmodel.model, qmodule)
 
@@ -475,19 +470,17 @@ class GDNSQQuant(BaseQuant):
             # Bias quantization has been removed; always disable it.
             self.quant_bias = False
 
-    def _quantize_module(self, module, signed_activations):
+    def _quantize_module(self, module):
         self.qnmethod = QNMethod[self.quant_config.params.qnmethod]
         disable_activations = self.config.quantization.act_bit == -1
         if isinstance(module, nn.Conv2d):
             qmodule = self._quantize_module_conv2d(
                 module,
-                signed_activations=signed_activations,
                 disable_activations=disable_activations,
             )
         elif isinstance(module, nn.Linear):
             qmodule = self._quantize_module_linear(
                 module,
-                signed_activations=signed_activations,
                 disable_activations=disable_activations,
             )
         else:
@@ -507,7 +500,6 @@ class GDNSQQuant(BaseQuant):
         self,
         module: nn.Conv2d,
         *,
-        signed_activations: bool,
         disable_activations: bool,
     ):
         return NoisyConv2d(
@@ -523,7 +515,6 @@ class GDNSQQuant(BaseQuant):
             qscheme=self.qscheme,
             log_s_init=-12,
             quant_bias=self.quant_bias,
-            signed=signed_activations,
             disable=disable_activations,
             qnmethod=self.qnmethod,
             weight_guard_bit=self.weight_guard_bit,
@@ -534,7 +525,6 @@ class GDNSQQuant(BaseQuant):
         self,
         module: nn.Linear,
         *,
-        signed_activations: bool,
         disable_activations: bool,
     ):
         return NoisyLinear(
@@ -543,7 +533,6 @@ class GDNSQQuant(BaseQuant):
             is_biased(module),
             qscheme=self.qscheme,
             log_s_init=-12,
-            signed=signed_activations,
             disable=disable_activations,
             qnmethod=self.qnmethod,
             weight_guard_bit=self.weight_guard_bit,
