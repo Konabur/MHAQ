@@ -113,9 +113,10 @@ class GDNSQQuant(BaseQuant):
 
         # Replacing layers directly
         qlayers = self._get_layers(lmodel.model, exclude_layers=self.excluded_layers)
+        skip_1x1 = self.quant_config.params.skip_1x1_conv
         for layer in qlayers.keys():
             module = attrgetter(layer)(lmodel.model)
-            if module.kernel_size != (1, 1):
+            if (not skip_1x1) or module.kernel_size != (1, 1):
                 # print(layer + " " + repr(module.kernel_size))
                 preceding_layer_type = layer_types[layer_names.index(layer) - 1]
                 following_layer_type = layer_types[layer_names.index(layer) + 1]
