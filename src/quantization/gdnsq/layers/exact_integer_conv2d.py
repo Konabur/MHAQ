@@ -47,7 +47,7 @@ class ExactIntegerConv2d(nn.Module):
     The activation integer zero-point offset is folded using a **position-independent**
     correction: for constant code-domain input ``azp``, each output channel of
     ``conv(azp * 1, guard_w * w + wzp)`` equals ``azp * sum(guard_w * w + wzp)`` over
-    that channel's kernel (ignoring padding / border effects). That yields a 1×C×1×1
+    that channel's kernel (ignoring padding / border effects). That yields a 1xCx1x1
     bias instead of a full-resolution map (which would track image size).
     """
 
@@ -150,14 +150,14 @@ class ExactIntegerConv2d(nn.Module):
         out = self.guard_w * c1 + self.wzp.view(1, -1, 1, 1) * c2
 
         (bias,) = _buffers_like(x, self.bias)
-        # Broadcast bias 1×C×1×1 over batch (avoid expand(batch) — breaks under FX Proxy shapes).
+        # Broadcast bias 1xCx1x1 over batch (avoid expand(batch) - breaks under FX Proxy shapes).
         return out * self.fp_scale + bias
 
 
 class BinarizedExactIntegerConv2d(nn.Module):
     """
     Same core as `ExactIntegerConv2d` but replaces ``out * fp_scale + bias`` with
-    ``where(out >= th, code_hi, code_lo)`` (integer `th` per channel, broadcast 1×C×1×1).
+    ``where(out >= th, code_hi, code_lo)`` (integer `th` per channel, broadcast 1xCx1x1).
     """
 
     def __init__(self, base: ExactIntegerConv2d):
