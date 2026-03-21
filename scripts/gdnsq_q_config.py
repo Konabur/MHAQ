@@ -55,6 +55,7 @@ def main():
     logger.info("Calibrating model initial weights and scales")
     validator.calibrate(qmodel, datamodule=data)
 
+    logger.info(f"Model after calibration:\n{qmodel}")
     # # Finetune model
     trainer.fit(qmodel, datamodule=data)
 

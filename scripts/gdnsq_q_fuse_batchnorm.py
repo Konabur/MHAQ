@@ -261,6 +261,8 @@ def main():
     model = model_composer.compose()
     qmodel = quantizer.quantize(model, in_place=True)
 
+    logger.info(f"Model after layer replacement:\n{qmodel}")
+
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     state = ckpt.get("state_dict", ckpt)
     qmodel.load_state_dict(state, strict=False)
