@@ -234,7 +234,7 @@ class Trainer(pl.Trainer):
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             torch.distributed.destroy_process_group()  # shutdown DDP to allow single-GPU testing
         return super().test(
-            model, dataloaders, ckpt_path, verbose, datamodule, weights_only
+            model, dataloaders, ckpt_path, verbose, datamodule
         )
 
 
@@ -368,7 +368,7 @@ class Validator(Trainer):
         weights_only: bool | None = None,
     ):
         return super().validate(
-            model, dataloaders, ckpt_path, verbose, datamodule, weights_only
+            model, dataloaders, ckpt_path, verbose, datamodule
         )
 
     @rank_zero_only
@@ -382,7 +382,7 @@ class Validator(Trainer):
         weights_only: bool | None = None,
     ):
         return super().test(
-            model, dataloaders, ckpt_path, verbose, datamodule, weights_only
+            model, dataloaders, ckpt_path, verbose, datamodule
         )
 
     @rank_zero_only
@@ -404,5 +404,4 @@ class Validator(Trainer):
             datamodule=datamodule,
             return_predictions=return_predictions,
             ckpt_path=ckpt_path,
-            weights_only=weights_only,
         )
