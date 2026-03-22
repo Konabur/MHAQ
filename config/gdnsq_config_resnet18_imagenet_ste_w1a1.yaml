@@ -1,9 +1,8 @@
 model:
   type: VISION_CLS
   name: resnet18
-  cpt_url: "file://data/models/ilsvrc2012-resnet18_from_resnet34.pt"
   params:
-    pretrained: False
+    pretrained: True
     num_classes: 1000
 
 training:
@@ -41,9 +40,9 @@ training:
 
 data:
   dataset_name: IMAGENET
-  data_dir: ./data/imagenet/
+  data_dir: /kaggle/input/imagenet-object-localization-challenge/ILSVRC/Data/CLS-LOC
   batch_size: 250
-  num_workers: 8
+  num_workers: 4
 
 
 quantization:

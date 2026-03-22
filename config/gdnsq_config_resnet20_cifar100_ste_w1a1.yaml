@@ -9,7 +9,7 @@ training:
   criterion: CrossEntropyLoss
   optimizer: RAdam
   learning_rate: 0.002
-  max_epochs: 1500
+  max_epochs: 300
   val_every_n_epochs: 2
   log_every_n_steps: 10
   loggers:
@@ -27,18 +27,18 @@ training:
     TemperatureScale:
       params:
         scale_lr: 1
-        warmup: 1000
+        warmup: 100
     NoiseEarlyStopping:
       params:
         monitor: Metric/ns_Accuracy_top1
         mode: max
-        patience: 100
+        patience: 50
         min_delta: 0.0001
 
 data:
   dataset_name: CIFAR100
   batch_size: 1000
-  num_workers: 10
+  num_workers: 4
 
 
 quantization:

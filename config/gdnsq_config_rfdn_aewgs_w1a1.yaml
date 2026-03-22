@@ -10,7 +10,7 @@ training:
   criterion: L1Loss
   optimizer: RAdam
   learning_rate: 0.0005
-  max_epochs: 2500
+  max_epochs: 500
   val_every_n_epochs: 10
   log_every_n_steps: 10
   loggers:
@@ -29,19 +29,19 @@ training:
       params:
         scale_lr: 1
         scale_anneal: 0.9999
-        warmup: 500
+        warmup: 200
     NoiseEarlyStopping:
       params:
         monitor: PSNR/Weighted_mean
         mode: max
-        patience: 1000
+        patience: 200
         min_delta: 0.00005
 
 data:
   dataset_name: SR
   data_dir: ./data/
   batch_size: 24
-  num_workers: 8
+  num_workers: 4
   params:
     denormalize: True
     to_luminance: True
