@@ -1,0 +1,61 @@
+model:
+  type: VISION_CLS
+  name: wrn20_10_cifar10
+  params:
+    pretrained: True
+    num_classes: 10
+
+training:
+  criterion: CrossEntropyLoss
+  optimizer: RAdam
+  learning_rate: 0.002
+  max_epochs: 1000
+  val_every_n_epochs: 2
+  log_every_n_steps: 10
+  loggers:
+    WandbLogger:
+      params:
+        name: wrn20_10_cifar10-w1a1
+        note: "Sym KL loss AEWGS"
+
+  callbacks:
+    ModelCheckpoint:
+      params:
+        monitor: Metric/ns_Accuracy_top1
+        mode: max
+        auto_insert_metric_name: False
+        filename: gdnsq_checkpoint-{epoch:02d}-{Metric/ns_Accuracy_top1:.4f}
+    TemperatureScale:
+      params:
+        scale_lr: 1
+        warmup: 1000
+    NoiseEarlyStopping:
+      params:
+        monitor: Metric/ns_Accuracy_top1
+        mode: max
+        patience: 100
+        min_delta: 0.0001
+
+data:
+  dataset_name: CIFAR10
+  batch_size: 250
+  num_workers: 2
+
+quantization:
+  name: GDNSQQuant
+  qscheme: 1
+  act_bit: 1
+  weight_bit: 1
+  freeze_batchnorm: False
+  fuse_batchnorm: False
+  excluded_layers:
+    - 'features.init_block.conv'
+    - 'output'
+  calibration:
+    act_bit: 10
+    weight_bit: 10
+  params:
+    distillation: True
+    distillation_loss: Symmetrical KL
+    qnmethod: AEWGS
+    skip_1x1_conv: True

@@ -3,6 +3,7 @@ from torchvision.models import resnet18
 from .cls.resnet.resnet_cifar import resnet20_cifar10
 from .cls.resnet.resnet_cifar import resnet20_cifar10_new
 from .cls.resnet.resnet_cifar import resnet20_cifar100
+from .cls.wrn import wrn20_10_cifar10, wrn20_10_cifar100, wrn20_10_svhn
 from .od import yolo_v11
 from .od.yolo_v11 import yolo_v11_n
 from .sr import RFDN
@@ -17,4 +18,7 @@ __all__ = [
     "resnet20_cifar10_new",
     "yolo_v11_n",
     "RFDN",
+    "wrn20_10_cifar10",
+    "wrn20_10_cifar100",
+    "wrn20_10_svhn",
 ]

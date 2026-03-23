@@ -5,6 +5,7 @@ from .cls.imagenet import ImageNetDataModule as IMAGENET
 # from .cls.cifar10_dali import CIFAR10DALIDataModule as CIFAR10_DALI
 # from .cls.cifar100_dali import CIFAR10DALIDataModule as CIFAR100_DALI
 from .cls.cifar100_gen import CIFAR100GenDataModule as CIFAR100_GEN
+from .cls.svhn import SVHNDataModule as SVHN
 # from .cls.imagenet_dali import ImageNetDALIDataModule as IMAGENET_DALI
 
 from .od.voc_yolo import YOLOVOCDataModule2012 as VOC2012_YOLO
@@ -22,5 +23,6 @@ __all__ = [
     # "IMAGENET_DALI",
     "VOC2012_YOLO",
     "COCO",
+    "SVHN",
     "SR",
 ]
