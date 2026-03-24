@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import shutil
+import glob
 
 # ──────────────────────────────────────────────────────────────────────
 # CONFIG: pick ONE of "cifar10", "cifar100", "svhn"
@@ -28,14 +29,22 @@ CONFIGS = {
     "svhn":     "config/gdnsq_config_wrn20_10_svhn_w1a1.yaml",
 }
 
-# Paths — adjust REPO_DIR if you uploaded the repo as a Kaggle dataset.
-REPO_DIR = "/kaggle/input/mhaq"       # where the repo lives on Kaggle
-WORK_DIR = "/kaggle/working"           # writable output directory
+# Paths — copy repo from read-only input to writable working dir.
+REPO_SRC = "/kaggle/input/mhaq"
+REPO_DIR = "/kaggle/working/mhaq"
+WORK_DIR = "/kaggle/working"
 CONFIG   = CONFIGS[DATASET]
 
 TRAIN_CKPT = os.path.join(WORK_DIR, f"wrn20_10_{DATASET}_trained.ckpt")
 FUSED_CKPT = os.path.join(WORK_DIR, f"wrn20_10_{DATASET}_fused.ckpt")
 BINAR_CKPT = os.path.join(WORK_DIR, f"wrn20_10_{DATASET}_binarized.ckpt")
+
+
+# ── SETUP ────────────────────────────────────────────────────────────
+os.environ["WANDB_MODE"] = "disabled"
+
+if not os.path.exists(REPO_DIR):
+    shutil.copytree(REPO_SRC, REPO_DIR)
 
 
 def run(cmd, **kwargs):
@@ -58,7 +67,6 @@ run("pip install -q -r requirements.txt")
 run(f"python scripts/gdnsq_q_config.py --config {CONFIG}")
 
 # Find best checkpoint saved by ModelCheckpoint callback.
-import glob
 ckpt_pattern = os.path.join(REPO_DIR, "**", "gdnsq_checkpoint-*.ckpt")
 ckpts = sorted(glob.glob(ckpt_pattern, recursive=True), key=os.path.getmtime)
 if not ckpts:
