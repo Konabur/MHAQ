@@ -58,7 +58,9 @@ def run(cmd, **kwargs):
 
 
 # ── 0. Install deps ──────────────────────────────────────────────────
-run("pip install -q -r requirements.txt")
+# Only install packages not pre-installed on Kaggle.
+# Full requirements.txt causes version conflicts with Kaggle's boto/s3transfer.
+run("pip install -q pytorchcv piq")
 
 # ── 1. Train (QAT) ──────────────────────────────────────────────────
 # The trained checkpoint is saved by ModelCheckpoint callback into
