@@ -56,7 +56,7 @@ def main():
     validator.calibrate(qmodel, datamodule=data)
 
     logger.info(f"Model after calibration:\n{qmodel}")
-    # # Finetune model
+    # Finetune model
     trainer.fit(qmodel, datamodule=data)
 
     idx = trainer.callbacks.index([cb for cb in trainer.callbacks if "ModelCheckpoint" in cb.__class__.__name__][0])

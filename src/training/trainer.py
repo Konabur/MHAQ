@@ -108,18 +108,18 @@ class Trainer(pl.Trainer):
                 )
                 for _callback in tconfig.callbacks
             ]
+            if logger is None:
+                logger = [
+                    getattr(compose_loggers, _logger)(**tconfig.loggers[_logger].params)
+                    for _logger in tconfig.loggers
+                ]
 
-            logger = [
-                getattr(compose_loggers, _logger)(**tconfig.loggers[_logger].params)
-                for _logger in tconfig.loggers
-            ]
+                if TensorBoardLogger not in logger:
+                    logger.append(TensorBoardLogger(save_dir="logs"))
 
-            if TensorBoardLogger not in logger:
-                logger.append(TensorBoardLogger(save_dir="logs"))
-
-            for _logger in logger:
-                if isinstance(_logger, WandbLogger):
-                    _logger.log_hyperparams(config.dict())
+                for _logger in logger:
+                    if isinstance(_logger, WandbLogger):
+                        _logger.log_hyperparams(config.dict())
 
             check_val_every_n_epoch = tconfig.val_every_n_epochs
             val_check_interval = tconfig.val_check_interval
