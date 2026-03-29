@@ -25,8 +25,8 @@ def parse_args():
         required=False, 
         help="Path to the configuration file (YAML).",
         # default="config/gdnsq_config_yolo11.yaml"
-        # default="config/gdnsq_config_resnet20_old.yaml"
-        default="config/gdnsq_config_rfdn.yaml"
+        default="config/gdnsq_config_resnet20_cifar100_aewgs_w1a1.yaml"
+        # default="config/gdnsq_config_rfdn.yaml"
     )
     return parser.parse_args()
 
@@ -63,7 +63,17 @@ def main():
     validator.callbacks[idx] = trainer.callbacks[idx]
     validator.test(qmodel, datamodule=data, ckpt_path="best")
 
-    validator.predict(qmodel, datamodule=data, ckpt_path="best")
+    if config.quantization.fuse_batchnorm:
+        logger.info("Performin batchnorm fuse")
+        n_fused_batchnorm = quantizer.fuse_conv_bn(model)
+        logger.info(
+        "Fused %d BatchNorm layer(s) into previous NoisyConv2d and removed from graph.",
+        n_fused_batchnorm,
+        )
+        ckpt_path = validator.save_checkpoint()
+        validator.test(qmodel, datamodule=data, ckpt_path=ckpt_path)
+
+    validator.predict(qmodel, datamodule=data)
 
 if __name__ == "__main__":
     main()

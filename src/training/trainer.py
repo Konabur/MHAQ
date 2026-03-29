@@ -6,6 +6,7 @@ import lightning.pytorch as pl
 import logging
 import torch
 from lightning.pytorch.accelerators import Accelerator
+from lightning.pytorch.callbacks import ModelCheckpoint as PLModelCheckpoint
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.plugins import _PLUGIN_INPUT, Precision
 from lightning.pytorch.profilers import Profiler
@@ -102,12 +103,16 @@ class Trainer(pl.Trainer):
 
             max_epochs = tconfig.max_epochs
             log_every_n_steps = tconfig.log_every_n_steps
-            callbacks = [
-                getattr(compose_callbacks, _callback)(
-                    **tconfig.callbacks[_callback].params
-                )
-                for _callback in tconfig.callbacks
-            ]
+            if callbacks is None:
+                callbacks = [
+                    getattr(compose_callbacks, _callback)(
+                        **tconfig.callbacks[_callback].params
+                    )
+                    for _callback in tconfig.callbacks
+                ]
+            elif callbacks is False:
+                callbacks = []
+                
             if logger is None:
                 logger = [
                     getattr(compose_loggers, _logger)(**tconfig.loggers[_logger].params)
@@ -236,6 +241,46 @@ class Trainer(pl.Trainer):
         return super().test(
             model, dataloaders, ckpt_path, verbose, datamodule, weights_only
         )
+
+    def _get_model_checkpoint_callback(self) -> PLModelCheckpoint:
+        checkpoint_callback = next(
+            (cb for cb in self.callbacks if isinstance(cb, PLModelCheckpoint)),
+            None,
+        )
+        if checkpoint_callback is None:
+            raise ValueError(
+                "filepath was not provided and no ModelCheckpoint callback is configured."
+            )
+        return checkpoint_callback
+
+    def _infer_checkpoint_path(self) -> Path:
+        checkpoint_callback = self._get_model_checkpoint_callback()
+        monitor_candidates = {
+            **self.logged_metrics,
+            **self.callback_metrics,
+            "epoch": self.current_epoch,
+            "step": self.global_step,
+        }
+        inferred_path = Path(checkpoint_callback.format_checkpoint_name(monitor_candidates))
+        if inferred_path.suffix != checkpoint_callback.FILE_EXTENSION:
+            inferred_path = inferred_path.with_suffix(checkpoint_callback.FILE_EXTENSION)
+        return inferred_path.resolve()
+
+    def save_checkpoint(
+        self,
+        filepath: str | Path | None = None,
+        weights_only: bool = False,
+        storage_options: dict | None = None,
+    ) -> Path:
+        resolved_path = Path(filepath).expanduser().resolve() if filepath else self._infer_checkpoint_path()
+        super().save_checkpoint(
+            filepath=str(resolved_path),
+            weights_only=weights_only,
+            storage_options=storage_options,
+        )
+        log.info("Checkpoint saved to %s", resolved_path)
+
+        return resolved_path
 
 
 class Validator(Trainer):
