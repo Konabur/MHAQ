@@ -144,8 +144,9 @@ class GDNSQQuant(BaseQuant):
                 module.bias.requires_grad = not freeze
 
     def fuse_conv_bn(self, model: nn.Module):
+        if torch.cuda.is_available():
+            model = model.cuda()
         n_fused_batchnorm = fuse_batchnorm_and_normalize_activation_scales(model)
-        
         model.validation_step = type(model).validation_step.__get__(model, type(model))
 
         return n_fused_batchnorm

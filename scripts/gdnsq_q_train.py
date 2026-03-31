@@ -1,6 +1,7 @@
 import os
 import sys
 import resource
+
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (4096, rlimit[1]))
 import torch
@@ -31,6 +32,13 @@ def parse_args():
     return parser.parse_args()
 
 
+def get_best_checkpoint_path(trainer):
+    checkpoint_callback = trainer.checkpoint_callback
+    if checkpoint_callback is None or not checkpoint_callback.best_model_path:
+        return "best"
+    return checkpoint_callback.best_model_path
+
+
 def main():
     args = parse_args()
 
@@ -59,13 +67,11 @@ def main():
     # Finetune model
     trainer.fit(qmodel, datamodule=data)
 
-    idx = trainer.callbacks.index([cb for cb in trainer.callbacks if "ModelCheckpoint" in cb.__class__.__name__][0])
-    validator.callbacks[idx] = trainer.callbacks[idx]
-    validator.test(qmodel, datamodule=data, ckpt_path="best")
+    validator.test(qmodel, datamodule=data, ckpt_path=get_best_checkpoint_path(trainer))
 
     if config.quantization.fuse_batchnorm:
-        logger.info("Performin batchnorm fuse")
-        n_fused_batchnorm = quantizer.fuse_conv_bn(model)
+        logger.info("Performing batchnorm fuse")
+        n_fused_batchnorm = quantizer.fuse_conv_bn(qmodel)
         logger.info(
         "Fused %d BatchNorm layer(s) into previous NoisyConv2d and removed from graph.",
         n_fused_batchnorm,

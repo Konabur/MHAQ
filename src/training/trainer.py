@@ -56,7 +56,7 @@ class Trainer(pl.Trainer):
             | Literal["bf16"]
         ) = None,
         logger: Logger | Iterable[Logger] | bool | None = None,
-        callbacks: List[Callback] | pl.Callback | None = None,
+        callbacks: List[Callback] | pl.Callback | bool| None = None,
         fast_dev_run: int | bool = False,
         max_epochs: int | None = None,
         min_epochs: int | None = None,
@@ -311,7 +311,7 @@ class Validator(Trainer):
             | Literal["bf16"]
         ) = None,
         logger: Logger | Iterable[Logger] | bool | None = None,
-        callbacks: List[Callback] | pl.Callback | None = None,
+        callbacks: List[Callback] | pl.Callback | bool | None = None,
         fast_dev_run: int | bool = False,
         max_epochs: int | None = None,
         min_epochs: int | None = None,
