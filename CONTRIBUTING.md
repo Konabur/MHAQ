@@ -106,25 +106,49 @@ flake8 your_module/
 Execute ```git ls-files | tree --fromfile -d```
 
 ```bash
-Quant
-+-- config  # for training/quant config files
-+-- data    # for datasets placement
-+-- scripts # for scripts utilizing the main functionality
-+-- src
-|   +-- aux       # for additional funcs / small utils
-|   +-- callbacks # for lightning callbacks
-|   +-- config    # for configs handlers
-|   +-- data      # for data processing
-|   |   +-- vision_cls
-|   +-- models    # for models definition
-|   |   +-- compose
-|   |       +-- vision
-|   +-- quantization # for quantization methods definition
-|   |   +-- abc
-|   |   +-- dummy
-|   |   +-- gdnsq
-|   +-- training    # for specific training regimes
-+-- tests           # for tests
+├── config
+├── data
+│   └── models
+├── scripts
+│   └── training
+├── src
+│   ├── aux
+│   │   └── loss
+│   ├── callbacks
+│   ├── config
+│   ├── data
+│   │   ├── compose
+│   │   │   └── vision
+│   │   │       ├── cls
+│   │   │       ├── od
+│   │   │       │   └── utils
+│   │   │       └── sr
+│   │   │           ├── datasets
+│   │   │           └── transforms
+│   │   └── gen
+│   ├── loggers
+│   ├── models
+│   │   ├── cls
+│   │   │   └── resnet
+│   │   ├── compose
+│   │   │   └── vision
+│   │   ├── od
+│   │   │   ├── loss
+│   │   │   ├── metrics
+│   │   │   └── utils
+│   │   └── sr
+│   │       └── rfdn
+│   ├── quantization
+│   │   ├── abc
+│   │   ├── dummy
+│   │   └── gdnsq
+│   │       ├── calib
+│   │       ├── config
+│   │       ├── layers
+│   │       └── utils
+│   └── training
+├── tests
+└── .vscode
 ```
 
 ## Add Quantization

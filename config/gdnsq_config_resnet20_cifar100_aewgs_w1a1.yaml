@@ -47,8 +47,7 @@ quantization:
   qscheme: 1 # 0 for per-tensor, 1 for per-channel
   act_bit: 1
   weight_bit: 1
-  freeze_batchnorm: False
-  fuse_batchnorm: False
+  fuse_batchnorm: True
   excluded_layers:
     - 'features.init_block.conv'
     - 'output'

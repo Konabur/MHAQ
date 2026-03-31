@@ -1,8 +1,8 @@
 import lightning.pytorch as pl
 import torch.nn.functional as F
+import torchmetrics.detection
 import torchmetrics
 import torch
-import torchmetrics.detection
 
 from src.models.cls.resnet.resnet_cifar import resnet20_cifar10_new
 from src.quantization.abc.abc_quant import BaseQuant
@@ -12,6 +12,7 @@ from src.quantization.gdnsq.utils.model_helper import ModelHelper
 from src.quantization.gdnsq.gdnsq_loss import PotentialLoss
 from src.quantization.gdnsq.gdnsq_utils import QNMethod
 from src.quantization.gdnsq.utils import model_stats
+from src.quantization.gdnsq.utils.fuse_conv_bn import fuse_batchnorm_and_normalize_activation_scales
 from src.aux.qutils import attrsetter, is_biased
 from src.aux.loss.hellinger import HellingerLoss
 from src.aux.loss.symm_ce_loss import SymmetricalCrossEntropyLoss
@@ -118,12 +119,8 @@ class GDNSQQuant(BaseQuant):
             module = attrgetter(layer)(lmodel.model)
             if (not skip_1x1) or module.kernel_size != (1, 1):
                 # print(layer + " " + repr(module.kernel_size))
-                preceding_layer_type = layer_types[layer_names.index(layer) - 1]
-                following_layer_type = layer_types[layer_names.index(layer) + 1]
-                if issubclass(following_layer_type, nn.BatchNorm2d) and self.fusebn:
-                    self.fuse_conv_bn(
-                        qmodel.model, layer, layer_names[layer_names.index(layer) + 1]
-                    )
+                # preceding_layer_type = layer_types[layer_names.index(layer) - 1]
+                # following_layer_type = layer_types[layer_names.index(layer) + 1]
                 qmodule = self._quantize_module(module)
 
                 attrsetter(layer)(qmodel.model, qmodule)
@@ -146,30 +143,14 @@ class GDNSQQuant(BaseQuant):
                 module.weight.requires_grad = not freeze
                 module.bias.requires_grad = not freeze
 
-    def fuse_conv_bn(self, model: nn.Module, conv_name: str, bn_name: str):
-        conv = attrgetter(conv_name)(model)
+    def fuse_conv_bn(self, model: nn.Module):
+        if torch.cuda.is_available():
+            model = model.cuda()
+        n_fused_batchnorm = fuse_batchnorm_and_normalize_activation_scales(model)
+        model.validation_step = type(model).validation_step.__get__(model, type(model))
 
-        W = conv.weight.clone()
-        if conv.bias is not None:
-            b = conv.bias.clone()
-        else:
-            b = torch.zeros(conv.out_channels, device=W.device)
+        return n_fused_batchnorm
 
-        bn = attrgetter(bn_name)(model)
-        mu = bn.running_mean
-        var = bn.running_var
-        eps = bn.eps
-        gamma = bn.weight
-        beta = bn.bias
-
-        std = torch.sqrt(var + eps)
-        scale = gamma / std
-        shape = [-1] + [1] * (W.dim() - 1)
-
-        conv.weight.data = W * scale.view(shape)
-        conv.bias = nn.Parameter(beta + (b - mu) * scale)
-
-        attrsetter(bn_name)(model, nn.Identity())  # Replacing bn module with Identity
 
     @staticmethod
     def noisy_train_decorator(train_step):
