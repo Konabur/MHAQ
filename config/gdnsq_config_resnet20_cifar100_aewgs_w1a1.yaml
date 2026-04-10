@@ -58,3 +58,4 @@ quantization:
     distillation: True
     distillation_loss: Symmetrical KL
     qnmethod: AEWGS # AEWGS, EWGS
+    skip_1x1_conv: false  # Quantize 1x1 convolutions (identity shortcuts)
