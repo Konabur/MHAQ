@@ -43,7 +43,7 @@ class ModelComposer():
             if model_config.cpt_url:
                 if "file://" in model_config.cpt_url:
                     state_dict = torch.load(os.path.join(find_project_root(
-                        current_file_path), model_config.cpt_url.split("file://")[1]), weights_only=False)
+                        current_file_path), model_config.cpt_url.split("file://")[1]))
                 else:
                     state_dict = torch.hub.load_state_dict_from_url(
                         model_config.cpt_url)

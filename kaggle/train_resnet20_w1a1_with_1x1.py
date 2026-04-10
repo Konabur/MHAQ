@@ -1,92 +1,90 @@
 """
 Kaggle training script for ResNet20 CIFAR100 W1A1 with 1x1 conv quantization.
 
-Minimal version - assumes repo is cloned, skips requirements.txt installation.
-Only installs critical missing packages if needed.
-
 Usage on Kaggle:
 1. Create new notebook with GPU P100
-2. Clone repo: !git clone -b binarization https://github.com/Konabur/MHAQ.git
-3. Run: !python MHAQ/kaggle/train_resnet20_w1a1_with_1x1.py
+2. Run this script
 """
 
 import os
-import sys
 import subprocess
-from pathlib import Path
+import sys
 
-# Configuration
+REPO_URL = "https://github.com/Konabur/MHAQ.git"
+BRANCH = "binarization"
 REPO_DIR = "/kaggle/working/MHAQ"
 CONFIG_PATH = "config/gdnsq_config_resnet20_cifar100_aewgs_w1a1.yaml"
 
-def check_dependencies():
-    """Check and install only critical missing packages."""
-    print("Checking dependencies...")
 
-    # Core packages needed for training
-    required = ["lightning", "pytorchcv", "wandb", "piq", "torchmetrics"]
-    missing = []
+def clone_repo():
+    """Clone repository."""
+    if os.path.exists(REPO_DIR):
+        print(f"Repository already exists at {REPO_DIR}")
+        return
 
-    for pkg in required:
-        try:
-            __import__(pkg)
-        except ImportError:
-            missing.append(pkg)
-
-    if missing:
-        print(f"Installing missing packages: {', '.join(missing)}")
-        subprocess.run(
-            ["pip", "install", "-q"] + missing,
-            check=True
-        )
-        print("Installation complete")
-    else:
-        print("All required packages available")
+    print(f"Cloning {REPO_URL} (branch: {BRANCH})...")
+    subprocess.run(
+        ["git", "clone", "-b", BRANCH, REPO_URL, REPO_DIR],
+        check=True
+    )
+    print("Clone complete")
 
 
-def verify_config():
-    """Verify skip_1x1_conv is set to false."""
-    config_file = Path(REPO_DIR) / CONFIG_PATH
-    if not config_file.exists():
-        raise FileNotFoundError(f"Config not found: {config_file}")
+def install_dependencies():
+    """Install dependencies with P100-compatible torch."""
+    print("\nInstalling dependencies...")
 
-    content = config_file.read_text()
+    # Install torch 2.2.0 for P100 compatibility (compute capability 6.0)
+    print("Installing PyTorch 2.2.0 (P100 compatible)...")
+    subprocess.run([
+        "pip", "install", "-q",
+        "torch==2.2.0",
+        "torchvision==0.17.0"
+    ], check=True)
 
-    if "skip_1x1_conv: false" not in content and "skip_1x1_conv:false" not in content:
-        print("Adding skip_1x1_conv: false to config...")
-        lines = content.split('\n')
-        for i, line in enumerate(lines):
-            if 'qnmethod:' in line:
-                indent = len(line) - len(line.lstrip())
-                lines.insert(i + 1, ' ' * indent + 'skip_1x1_conv: false')
-                break
-        config_file.write_text('\n'.join(lines))
-        print("Config updated")
-    else:
-        print("Config OK: skip_1x1_conv = false")
+    # Install requirements.txt but skip torch/torchvision
+    print("Installing other dependencies...")
+    subprocess.run([
+        "pip", "install", "-q", "-r", f"{REPO_DIR}/requirements.txt",
+        "--no-deps"  # Don't install dependencies to avoid torch reinstall
+    ], check=False)  # Don't fail if some packages conflict
+
+    # Install critical missing packages
+    subprocess.run([
+        "pip", "install", "-q",
+        "lightning==2.2.0",  # Compatible with torch 2.2
+        "pytorchcv",
+        "piq",
+        "torchmetrics"
+    ], check=True)
+
+    print("Dependencies installed")
 
 
 def train():
     """Run training."""
     print("\n" + "=" * 80)
-    print("Starting training on P100...")
-    print("Expected: ~1000 epochs, several hours")
+    print("Starting training...")
     print("=" * 80 + "\n")
 
     os.chdir(REPO_DIR)
 
+    # Disable wandb
+    env = os.environ.copy()
+    env["WANDB_DISABLED"] = "true"
+
     cmd = ["python", "scripts/gdnsq_q_train.py", "--config", CONFIG_PATH]
     print(f"Command: {' '.join(cmd)}\n")
 
-    result = subprocess.run(cmd)
+    result = subprocess.run(cmd, env=env)
 
     if result.returncode == 0:
         print("\n" + "=" * 80)
         print("Training completed!")
-        print("Checkpoint saved in:", REPO_DIR)
+        print(f"Checkpoint saved in: {REPO_DIR}")
         print("=" * 80)
     else:
-        print("\nTraining failed or interrupted")
+        print("\nTraining failed")
         sys.exit(1)
 
 
@@ -94,15 +92,9 @@ def main():
     print("ResNet20 CIFAR100 W1A1 Training (with 1x1 quantization)")
     print("=" * 80)
 
-    if not Path(REPO_DIR).exists():
-        print(f"\nError: Repository not found at {REPO_DIR}")
-        print("Please clone first:")
-        print("  !git clone -b binarization https://github.com/Konabur/MHAQ.git")
-        sys.exit(1)
-
     try:
-        check_dependencies()
-        verify_config()
+        clone_repo()
+        install_dependencies()
         train()
     except Exception as e:
         print(f"\nError: {e}")

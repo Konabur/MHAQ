@@ -234,12 +234,11 @@ class Trainer(pl.Trainer):
         ckpt_path: _LITERAL_WARN | Path | None = None,
         verbose: bool = True,
         datamodule: pl.LightningDataModule | None = None,
-        weights_only: bool | None = None,
     ):
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             torch.distributed.destroy_process_group()  # shutdown DDP to allow single-GPU testing
         return super().test(
-            model, dataloaders, ckpt_path, verbose, datamodule, weights_only
+            model, dataloaders, ckpt_path, verbose, datamodule
         )
 
     def _get_model_checkpoint_callback(self) -> PLModelCheckpoint:
@@ -269,13 +268,11 @@ class Trainer(pl.Trainer):
     def save_checkpoint(
         self,
         filepath: str | Path | None = None,
-        weights_only: bool = False,
         storage_options: dict | None = None,
     ) -> Path:
         resolved_path = Path(filepath).expanduser().resolve() if filepath else self._infer_checkpoint_path()
         super().save_checkpoint(
             filepath=str(resolved_path),
-            weights_only=weights_only,
             storage_options=storage_options,
         )
         log.info("Checkpoint saved to %s", resolved_path)
@@ -410,10 +407,9 @@ class Validator(Trainer):
         ckpt_path: _LITERAL_WARN | Path | None = None,
         verbose: bool = True,
         datamodule: pl.LightningDataModule | None = None,
-        weights_only: bool | None = None,
     ):
         return super().validate(
-            model, dataloaders, ckpt_path, verbose, datamodule, weights_only
+            model, dataloaders, ckpt_path, verbose, datamodule
         )
 
     @rank_zero_only
@@ -424,10 +420,9 @@ class Validator(Trainer):
         ckpt_path: Path | None | _LITERAL_WARN = None,
         verbose: bool = True,
         datamodule: pl.LightningDataModule | None = None,
-        weights_only: bool | None = None,
     ):
         return super().test(
-            model, dataloaders, ckpt_path, verbose, datamodule, weights_only
+            model, dataloaders, ckpt_path, verbose, datamodule
         )
 
     @rank_zero_only
@@ -438,7 +433,6 @@ class Validator(Trainer):
         datamodule: pl.LightningDataModule | None = None,
         return_predictions: bool | None = None,
         ckpt_path: Path | str | None = None,
-        weights_only: bool | None = None,
     ):
         # Lightning `predict()` can run distributed barriers during `prepare_data()`.
         # This repo destroys the process group during `test()`, so all ranks must not
@@ -449,5 +443,4 @@ class Validator(Trainer):
             datamodule=datamodule,
             return_predictions=return_predictions,
             ckpt_path=ckpt_path,
-            weights_only=weights_only,
         )
