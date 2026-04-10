@@ -23,21 +23,15 @@ def check_dependencies():
     """Check and install only critical missing packages."""
     print("Checking dependencies...")
 
+    # Core packages needed for training
+    required = ["lightning", "pytorchcv", "wandb", "piq", "torchmetrics"]
     missing = []
-    try:
-        import pytorch_lightning
-    except ImportError:
-        missing.append("pytorch-lightning")
 
-    try:
-        import pytorchcv
-    except ImportError:
-        missing.append("pytorchcv")
-
-    try:
-        import wandb
-    except ImportError:
-        missing.append("wandb")
+    for pkg in required:
+        try:
+            __import__(pkg)
+        except ImportError:
+            missing.append(pkg)
 
     if missing:
         print(f"Installing missing packages: {', '.join(missing)}")
@@ -45,8 +39,9 @@ def check_dependencies():
             ["pip", "install", "-q"] + missing,
             check=True
         )
+        print("Installation complete")
     else:
-        print("All critical packages available")
+        print("All required packages available")
 
 
 def verify_config():
@@ -80,7 +75,7 @@ def train():
 
     os.chdir(REPO_DIR)
 
-    cmd = ["python", "scripts/train.py", "--config", CONFIG_PATH]
+    cmd = ["python", "scripts/gdnsq_q_train.py", "--config", CONFIG_PATH]
     print(f"Command: {' '.join(cmd)}\n")
 
     result = subprocess.run(cmd)
